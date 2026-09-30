@@ -59,6 +59,20 @@ def test_build_existing_checkout_and_errors(tmp_path: Path) -> None:
 # -- models --------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def plenty_of_disk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup tests must not depend on the free space of the machine running them."""
+    import shutil
+
+    from vpipe_api.setup import models as models_mod
+
+    monkeypatch.setattr(
+        models_mod.shutil,
+        "disk_usage",
+        lambda _: shutil._ntuple_diskusage(10**13, 0, 10**13),  # type: ignore[attr-defined]
+    )
+
+
 def test_fetch_only_keeps_model_fetch_stages() -> None:
     spec = {
         "id": "p",

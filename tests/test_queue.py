@@ -178,6 +178,7 @@ def test_idempotency_index_survives_restart(tmp_path: Path, runner: FakeRunner) 
         retention_days=7,
     )
     first, _ = q1.submit(EchoWorkflow(), EchoParams(text="a"), "k")
+    store.save(first.canceled())  # finished, so the restarted queue does not run it
     q2 = JobQueue(
         store,
         WorkflowRegistry([EchoWorkflow()]),
