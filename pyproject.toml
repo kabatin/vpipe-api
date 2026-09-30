@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vpipe-api"
+version = "0.1.0"
+description = "Expose vpipe (on-device generative pipelines for Apple Silicon) as an HTTP job API"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "kabatin" }]
+keywords = ["vpipe", "apple-silicon", "video-generation", "minimax-h3", "fastapi"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: FastAPI",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Video",
+]
+dependencies = [
+  "fastapi>=0.132",  # older versions parse Content-Type-less bodies as JSON (CSRF)
+  "uvicorn>=0.30",
+  "pydantic>=2.8",
+  "pillow>=10.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/kabatin/vpipe-api"
+Issues = "https://github.com/kabatin/vpipe-api/issues"
+
+[project.scripts]
+vpipe-api = "vpipe_api.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "pyright>=1.1.380",
+  "httpx2>=2.13.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vpipe_api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "PTH", "T20"]
+ignore = [
+  "S603", # subprocess without shell=True is exactly what we want
+  "S607", # tools (ffmpeg, git, cmake, pmset) are resolved from PATH on purpose
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S104", "S105", "S106", "S108", "PTH"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --cov=vpipe_api --cov-report=term-missing --cov-fail-under=80"
+markers = ["ffmpeg: needs ffmpeg/ffprobe on PATH"]
