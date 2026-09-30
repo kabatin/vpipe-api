@@ -35,6 +35,9 @@ def test_workflows_and_config(env: Path, capsys: pytest.CaptureFixture[str]) -> 
 def test_doctor_exit_codes(
     env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.setattr(
+        doctor, "check_platform", lambda: doctor.Check("platform", doctor.Level.OK, "")
+    )
     monkeypatch.setattr(doctor, "check_power", lambda: doctor.Check("power", doctor.Level.OK, ""))
     monkeypatch.setattr(doctor, "check_memory", lambda: doctor.Check("memory", doctor.Level.OK, ""))
     assert cli.main(["doctor"]) == 1

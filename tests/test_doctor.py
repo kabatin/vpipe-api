@@ -22,6 +22,8 @@ def fake_run(outputs: dict[str, str]):
 
 @pytest.fixture
 def healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CI also runs on Linux: pretend to be the Apple Silicon Mac vpipe needs
+    monkeypatch.setattr(doctor, "check_platform", lambda: doctor.Check("platform", Level.OK, ""))
     monkeypatch.setattr(
         doctor,
         "_run",
