@@ -50,7 +50,17 @@ class QueueFullError(Exception):
 
 
 class IdempotencyConflictError(Exception):
-    """The Idempotency-Key is in flight, or was used with different params."""
+    """The Idempotency-Key was already used with different params (a client bug)."""
+
+    code = "idempotency_conflict"
+    retryable = False
+
+
+class IdempotencyInFlightError(IdempotencyConflictError):
+    """Another request with this key is being accepted right now: retry shortly."""
+
+    code = "idempotency_in_flight"
+    retryable = True
 
 
 class JobNotFoundError(KeyError):
@@ -223,8 +233,8 @@ class JobQueue:
 
     def _existing_locked(self, key: tuple[str, str], params_hash: str | None) -> JobRecord | None:
         if key in self._pending_keys:
-            raise IdempotencyConflictError(
-                "a request with this Idempotency-Key is still being processed"
+            raise IdempotencyInFlightError(
+                "a request with this Idempotency-Key is still being processed; retry shortly"
             )
         job_id = self._keys.get(key)
         if job_id is None:

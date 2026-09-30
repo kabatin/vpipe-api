@@ -27,7 +27,8 @@ Every non-2xx response uses the same shape:
 | 403 | `forbidden_host` / `proxy_requires_token` | false | token-less server reached via a foreign Host or a proxy |
 | 404 | `not_found` | false | unknown workflow or job |
 | 409 | `conflict` | false | e.g. output requested before the job succeeded, cancel of a finished job |
-| 409 | `idempotency_conflict` | false | `Idempotency-Key` reused with different params, or still in flight |
+| 409 | `idempotency_conflict` | false | `Idempotency-Key` reused with different params |
+| 409 | `idempotency_in_flight` | true | another request with the same key is being accepted right now |
 | 411 | `length_required` | false | chunked upload without `Content-Length` |
 | 413 | `payload_too_large` | false | request body over the limit (64 MB) |
 | 422 | `invalid_params` | false | params failed validation; `details` lists the problems |
@@ -73,7 +74,8 @@ Success is `202 Accepted`:
 **Idempotency.** Send an `Idempotency-Key` (e.g. your own job id) to make retries safe. Resubmitting
 the same key with the same params returns the job it already created with `200 OK` (same body shape)
 — never a second job and never `429`. The same key with different params is `409
-idempotency_conflict`. Keys are remembered as long as the job record (`retention_days`).
+idempotency_conflict`; a concurrent request with the same key gets `409 idempotency_in_flight`
+(retryable — try again shortly). Keys are remembered as long as the job record (`retention_days`).
 
 ### `GET /v1/jobs/{job_id}`
 

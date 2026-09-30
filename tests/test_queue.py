@@ -208,8 +208,9 @@ def test_in_flight_key_conflicts(tmp_path: Path, runner: FakeRunner) -> None:
         retention_days=7,
     )
     q._pending_keys.add(("echo", "busy-key"))
-    with pytest.raises(IdempotencyConflictError, match="still being processed"):
+    with pytest.raises(IdempotencyConflictError, match="still being processed") as info:
         q.submit(EchoWorkflow(), EchoParams(text="a"), "busy-key")
+    assert info.value.retryable and info.value.code == "idempotency_in_flight"
 
 
 def test_redact_hides_home_directories() -> None:

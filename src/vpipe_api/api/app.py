@@ -58,7 +58,7 @@ def _submit_endpoint(queue: JobQueue, workflow: Workflow) -> Callable[..., Any]:
         except QueueFullError as exc:
             return busy_response(exc.retry_after_s)
         except IdempotencyConflictError as exc:
-            return error_response(409, "idempotency_conflict", str(exc))
+            return error_response(409, exc.code, str(exc), retryable=exc.retryable)
         except InvalidParamsError as exc:
             return error_response(422, "invalid_params", str(exc))
         return JSONResponse(
