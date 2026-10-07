@@ -1,7 +1,9 @@
 import base64
+import io
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 from tests.conftest import make_png
@@ -110,6 +112,15 @@ def test_store_inputs_writes_png_and_seed(tmp_path: Path) -> None:
     assert isinstance(stored["seed"], int)
     assert (tmp_path / "job" / "inputs" / "start_image.png").read_bytes()[:4] == b"\x89PNG"
     assert "data" not in str(stored)
+
+
+def test_store_inputs_converts_webp_to_png(tmp_path: Path) -> None:
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), "green").save(buf, format="WEBP")
+    image = {"data": base64.b64encode(buf.getvalue()).decode(), "media_type": "image/webp"}
+    stored = H3VideoWorkflow(MediaTools()).store_inputs(params(start_image=image), tmp_path / "job")
+    assert stored["start_image"] == "inputs/start_image.png"
+    assert (tmp_path / "job" / "inputs" / "start_image.png").read_bytes()[:4] == b"\x89PNG"
 
 
 def test_store_inputs_rejects_mismatched_media_type(tmp_path: Path) -> None:

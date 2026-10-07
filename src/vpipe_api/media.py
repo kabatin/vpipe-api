@@ -11,8 +11,11 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+# The only Pillow decoders that ever see untrusted bytes.
+IMAGE_DECODERS = ("PNG", "JPEG", "WEBP")
 # MPO = multi-picture JPEG written by many cameras/phones; its first frame is a plain JPEG.
-ALLOWED_IMAGE_FORMATS = {
+# It has no opener of its own (the JPEG decoder returns it), so it is mapped but not decoded.
+IMAGE_MEDIA_TYPES = {
     "PNG": "image/png",
     "JPEG": "image/jpeg",
     "MPO": "image/jpeg",
@@ -39,9 +42,8 @@ class VideoInfo:
 def normalize_image(data: bytes, media_type: str) -> bytes:
     """Validate an uploaded image and re-encode it as an upright RGB PNG."""
     try:
-        # only the allowed decoders ever see untrusted bytes
-        with Image.open(io.BytesIO(data), formats=list(ALLOWED_IMAGE_FORMATS)) as img:
-            actual = ALLOWED_IMAGE_FORMATS.get(img.format or "")
+        with Image.open(io.BytesIO(data), formats=list(IMAGE_DECODERS)) as img:
+            actual = IMAGE_MEDIA_TYPES.get(img.format or "")
             if actual is None:
                 raise MediaError(f"unsupported image format {img.format!r}")
             if actual != media_type:

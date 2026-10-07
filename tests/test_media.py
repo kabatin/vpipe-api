@@ -6,7 +6,13 @@ import pytest
 from PIL import Image
 
 from tests.conftest import make_png, needs_ffmpeg
-from vpipe_api.media import MediaError, finalize_video, normalize_image, probe_video
+from vpipe_api.media import (
+    IMAGE_DECODERS,
+    MediaError,
+    finalize_video,
+    normalize_image,
+    probe_video,
+)
 
 
 def test_normalize_png(tmp_path: Path) -> None:
@@ -24,6 +30,55 @@ def test_normalize_applies_exif_orientation() -> None:
     out = normalize_image(buf.getvalue(), "image/jpeg")
     with Image.open(io.BytesIO(out)) as upright:
         assert upright.size == (20, 40)
+
+
+def _webp(img: Image.Image, **save_args: object) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", **save_args)
+    return buf.getvalue()
+
+
+def _animated_webp() -> bytes:
+    first, second = (Image.new("RGB", (64, 48), c) for c in ("red", "blue"))
+    return _webp(first, save_all=True, append_images=[second], duration=100)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(_webp(Image.new("RGB", (64, 48), "red")), id="lossy"),
+        pytest.param(_webp(Image.new("RGB", (64, 48), "red"), lossless=True), id="lossless"),
+        pytest.param(_webp(Image.new("RGBA", (64, 48), (255, 0, 0, 128))), id="alpha"),
+        pytest.param(_webp(Image.new("L", (64, 48), 128)), id="grayscale"),
+        pytest.param(_animated_webp(), id="animated"),
+    ],
+)
+def test_normalize_webp(data: bytes) -> None:
+    out = normalize_image(data, "image/webp")
+    with Image.open(io.BytesIO(out)) as img:
+        assert (img.format, img.mode, img.size) == ("PNG", "RGB", (64, 48))
+
+
+def test_normalize_webp_applies_exif_orientation() -> None:
+    exif = Image.Exif()
+    exif[0x0112] = 6  # rotate 90° CW on display
+    out = normalize_image(_webp(Image.new("RGB", (40, 20), "blue"), exif=exif), "image/webp")
+    with Image.open(io.BytesIO(out)) as upright:
+        assert upright.size == (20, 40)
+
+
+def test_normalize_accepts_mpo_as_jpeg() -> None:
+    first, second = Image.new("RGB", (40, 20), "red"), Image.new("RGB", (40, 20), "blue")
+    buf = io.BytesIO()
+    first.save(buf, format="MPO", save_all=True, append_images=[second])
+    out = normalize_image(buf.getvalue(), "image/jpeg")
+    with Image.open(io.BytesIO(out)) as img:
+        assert (img.format, img.size) == ("PNG", (40, 20))
+
+
+def test_every_image_decoder_has_a_pillow_opener() -> None:
+    Image.init()
+    assert set(IMAGE_DECODERS) <= set(Image.OPEN)
 
 
 def test_normalize_rejects_mismatch_and_garbage(tmp_path: Path) -> None:
