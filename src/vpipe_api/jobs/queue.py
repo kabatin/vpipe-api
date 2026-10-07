@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from vpipe_api.jobs.models import JobRecord, JobStatus
 from vpipe_api.jobs.store import JobStore
 from vpipe_api.runner import ProgressCallback, RunResult
-from vpipe_api.workflows.base import Workflow, WorkflowFailedError, WorkflowRegistry
+from vpipe_api.workflows.base import PreparedRun, Workflow, WorkflowFailedError, WorkflowRegistry
 
 log = logging.getLogger("vpipe_api.queue")
 
@@ -347,6 +347,7 @@ class JobQueue:
                 with self._cond:
                     self._progress[record.id] = value
 
+        prepared: PreparedRun | None = None
         try:
             prepared = workflow.prepare(record.id, record.params, job_dir)
             result = self._runner.run(
@@ -377,7 +378,8 @@ class JobQueue:
                 record.failed("internal", "internal error (see the server log)", retryable=True)
             )
         finally:
-            self._store.discard_inputs(record.id, "raw.mp4")
+            raw = [prepared.raw_output.name] if prepared is not None else []
+            self._store.discard_inputs(record.id, *raw)
             with self._cond:
                 self._running = None
                 self._progress.pop(record.id, None)

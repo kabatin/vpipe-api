@@ -228,7 +228,8 @@ class H3VideoWorkflow(Workflow):
     def prepare(self, job_id: str, params: Mapping[str, Any], job_dir: Path) -> PreparedRun:
         out = params["output"]
         width, height = generation_size(out["width"], out["height"], params["quality"])
-        raw = job_dir / "raw.mp4"
+        # Matroska, FFV1's own container: ffmpeg before 7 cannot put FFV1 in MP4
+        raw = job_dir / "raw.mkv"
 
         def anchor(name: str) -> Path | None:
             rel = params.get(name)

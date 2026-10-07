@@ -75,7 +75,7 @@ def test_first_frame_job_over_http(
     spec = json.loads(calls.read_text().splitlines()[0])
     prompt = next(s for s in spec["stages"] if s["id"] == "text-prompt")["config"]["text"]
     assert prompt == "波と🌊カモメ"  # UTF-8 kept intact for vpipe's parser
-    assert not (settings.data_dir / "jobs" / job["id"] / "raw.mp4").exists()
+    assert not (settings.data_dir / "jobs" / job["id"] / "raw.mkv").exists()
 
 
 @needs_ffmpeg

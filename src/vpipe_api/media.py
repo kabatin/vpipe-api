@@ -76,13 +76,19 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def probe_video(path: Path, ffprobe: str = "ffprobe") -> VideoInfo:
+    """Frames come from the container's count, else from counting packets.
+
+    Matroska stores no frame count, and its duration covers the (longer) audio track,
+    so duration x fps overcounts; counting packets only demuxes, it does not decode.
+    """
     result = _run(
         [
             ffprobe,
             "-v",
             "error",
+            "-count_packets",
             "-show_entries",
-            "stream=codec_type,width,height,nb_frames,r_frame_rate:format=duration",
+            "stream=codec_type,width,height,nb_frames,nb_read_packets,r_frame_rate:format=duration",
             "-of",
             "json",
             str(path),
@@ -95,8 +101,8 @@ def probe_video(path: Path, ffprobe: str = "ffprobe") -> VideoInfo:
         raise MediaError(f"{path.name} has no video stream")
     fps = float(Fraction(video.get("r_frame_rate", "0/1")))
     duration = float(data.get("format", {}).get("duration", 0.0))
-    frames_raw = video.get("nb_frames")
-    frames = int(frames_raw) if frames_raw not in (None, "N/A") else round(duration * fps)
+    counts = (video.get("nb_frames"), video.get("nb_read_packets"))
+    frames = next((int(n) for n in counts if n not in (None, "N/A")), round(duration * fps))
     return VideoInfo(
         width=int(video["width"]),
         height=int(video["height"]),
@@ -135,7 +141,10 @@ def finalize_video(
         f"crop={width}:{height},setsar=1,format=yuv420p,"
         "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
     )
+    # passthrough: one frame out per frame in (CFR mode in ffmpeg 6 pads Matroska's
+    # millisecond timestamps with a duplicate frame)
     cmd = [ffmpeg, "-y", "-v", "error", "-i", str(src), "-an", "-vf", vf]
+    cmd += ["-fps_mode", "passthrough"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p"]
     cmd += ["-metadata", f"comment={comment}", "-movflags", "+faststart", str(tmp)]
     _run(cmd)

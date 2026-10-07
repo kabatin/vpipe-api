@@ -23,7 +23,7 @@ def spec_for(out: Path, frames: int = 5) -> dict:
 
 
 def run(runner: VpipeRunner, tmp_path: Path, **kw) -> RunResult:
-    out = tmp_path / "run" / "raw.mp4"
+    out = tmp_path / "run" / "raw.mkv"
     return runner.run(
         spec_for(out),
         tmp_path / "run",
@@ -72,7 +72,7 @@ def test_stale_output_does_not_count(
     fake_vpipe: Path, work_dir: Path, tmp_path: Path, fake_mode
 ) -> None:
     fake_mode("no_output")
-    stale = tmp_path / "run" / "raw.mp4"
+    stale = tmp_path / "run" / "raw.mkv"
     stale.parent.mkdir(parents=True)
     stale.write_bytes(b"old")
     result = run(VpipeRunner(fake_vpipe, work_dir), tmp_path)

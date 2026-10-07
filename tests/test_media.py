@@ -150,8 +150,15 @@ def _mean_luma(path: Path) -> float:
 
 
 @needs_ffmpeg
+def test_probe_counts_frames_in_matroska_with_longer_audio(tmp_path: Path) -> None:
+    info = probe_video(_lossless_clip(tmp_path / "raw.mkv", audio=True))
+    assert info.duration_sec * info.fps > 24.5  # duration x fps would say 25
+    assert (info.frames, info.has_audio) == (24, True)
+
+
+@needs_ffmpeg
 def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
-    src = _lossless_clip(tmp_path / "raw.mp4", "testsrc=size=832x480", audio=True)
+    src = _lossless_clip(tmp_path / "raw.mkv", "testsrc=size=832x480", audio=True)
     dst = tmp_path / "out" / "o.mp4"
     finalize_video(src, dst, width=1280, height=720, comment="vpipe-job:abc")
     info = probe_video(dst)
@@ -169,7 +176,7 @@ def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
 
 @needs_ffmpeg
 def test_finalize_reencodes_a_lossless_source_of_the_same_size(tmp_path: Path) -> None:
-    src = _lossless_clip(tmp_path / "raw.mp4", "color=gray:s=320x192")
+    src = _lossless_clip(tmp_path / "raw.mkv", "color=gray:s=320x192")
     dst = tmp_path / "o.mp4"
     finalize_video(src, dst, width=320, height=192, comment="x")
     fields = _stream_fields(dst, "codec_name,pix_fmt,width,height")
@@ -178,20 +185,21 @@ def test_finalize_reencodes_a_lossless_source_of_the_same_size(tmp_path: Path) -
 
 @needs_ffmpeg
 @pytest.mark.parametrize(
-    ("color", "tagged", "full", "limited"),
+    ("color", "tagged", "full"),
     [
-        ("white", True, 255, 235),
-        ("black", True, 0, 16),
-        ("lime", True, 182, 172),  # BT.709 luma of pure green; BT.601 would give ~145
-        ("0x404040", False, 64, 71),  # untagged: still scaled as full range (not left at 64)
+        ("white", True, 255),
+        ("black", True, 0),
+        ("lime", True, 182),  # BT.709 luma of pure green; a BT.601 output would land near 145
+        ("0x404040", False, 64),  # not tagged pc: still scaled as full range, not left at 64
     ],
 )
 def test_finalize_outputs_limited_range_bt709(
-    tmp_path: Path, color: str, tagged: bool, full: int, limited: int
+    tmp_path: Path, color: str, tagged: bool, full: int
 ) -> None:
-    src = _lossless_clip(tmp_path / "raw.mp4", f"color={color}:s=320x192", tagged=tagged)
-    assert _stream_fields(src, "color_range")["color_range"] == ("pc" if tagged else "unknown")
-    assert abs(_mean_luma(src) - full) <= 1
+    src = _lossless_clip(tmp_path / "raw.mkv", f"color={color}:s=320x192", tagged=tagged)
+    assert (_stream_fields(src, "color_range")["color_range"] == "pc") is tagged
+    source_luma = _mean_luma(src)
+    assert abs(source_luma - full) <= 3  # full-range samples (older ffmpeg rounds a little)
     dst = tmp_path / "o.mp4"
     finalize_video(src, dst, width=640, height=360, comment="x")
     assert _stream_fields(dst, "color_range,color_space,color_primaries,color_transfer") == {
@@ -200,7 +208,7 @@ def test_finalize_outputs_limited_range_bt709(
         "color_primaries": "bt709",
         "color_transfer": "bt709",
     }
-    assert abs(_mean_luma(dst) - limited) <= 2
+    assert abs(_mean_luma(dst) - (16 + 219 * source_luma / 255)) <= 1.5
 
 
 def test_missing_binary_is_a_media_error(tmp_path: Path) -> None:
