@@ -49,9 +49,9 @@ GENERATION_SIZES: tuple[tuple[float, dict[str, tuple[int, int]]], ...] = (
 
 # Measured on an M5 (10-core GPU, 32 GB), 6 steps: ~140 jobs at 832x480 (56 frames
 # = 256 s ... 124 = 477 s ... 243 = 998 s, medians), 1024x576x124 = 640 s,
-# 1024x576x243 = 1460 s, 1344x768x124 = 1326 s.  t = 130 + 350 * x^1.28 with
-# x = pixels*frames relative to 832x480x124 fits them within ~5% rms (runs drift ~10%
-# from day to day); the denoise share scales with steps.
+# 1024x576x243 = 1460 s, 1344x768x124 = 1338 s, 1344x768x243 = 3213 s.
+# t = 150 + 330 * x^1.36 with x = pixels*frames relative to 832x480x124 fits them
+# within ~4% rms (runs drift ~10% from day to day); the denoise share scales with steps.
 _BASE_WORK = 832 * 480 * 124
 
 
@@ -223,7 +223,7 @@ class H3VideoWorkflow(Workflow):
         width, height = generation_size(out["width"], out["height"], params["quality"])
         work = width * height * params["frames"] / _BASE_WORK
         step_factor = 0.23 + 0.77 * params["steps"] / 6
-        return 130 + 350 * work**1.28 * step_factor
+        return 150 + 330 * work**1.36 * step_factor
 
     def prepare(self, job_id: str, params: Mapping[str, Any], job_dir: Path) -> PreparedRun:
         out = params["output"]

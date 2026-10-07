@@ -54,6 +54,7 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 | standard・124 フレーム | 約 10.5 分 |
 | final・124 フレーム | 約 22 分 |
 | standard・243 フレーム | 約 24 分 |
+| final・243 フレーム | 約 54 分 |
 
 > **ライセンスの注意**
 > - MiniMax H3 の重みは *MiniMax H3 Community License* に従う

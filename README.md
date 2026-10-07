@@ -39,7 +39,8 @@ to exactly the resolution you ask for; audio is dropped.
 | Anchors | `start_image`, `end_image` (base64 PNG/JPEG/WebP ≤ 20 MB; end needs start) |
 
 Measured on an M5 MacBook Pro (10-core GPU, 32 GB), 6 steps: draft 124 frames ≈ 8 min,
-standard 124 frames ≈ 10.5 min, final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min.
+standard 124 frames ≈ 10.5 min, final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min,
+final 243 frames ≈ 54 min.
 
 > **License note.** The MiniMax H3 weights are under the *MiniMax H3 Community License*, which does not permit use
 > in the United States, the European Union, the United Kingdom or South Korea, and has its own terms for

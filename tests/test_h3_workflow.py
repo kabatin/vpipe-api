@@ -106,7 +106,9 @@ def test_estimate_grows_with_work() -> None:
     final = wf.estimate_seconds(params(quality="final").model_dump())
     assert draft < standard < final < long
     assert 450 < draft < 510  # measured median 477 s for 832x480x124 at 6 steps
-    assert 1250 < final < 1400  # measured 1326 s for 1344x768x124 at 6 steps
+    assert 1250 < final < 1400  # measured 1338 s for 1344x768x124 at 6 steps
+    final_long = wf.estimate_seconds(params(quality="final", frames=243).model_dump())
+    assert 3000 < final_long < 3400  # measured 3213 s for 1344x768x243 at 6 steps
 
 
 def test_store_inputs_writes_png_and_seed(tmp_path: Path) -> None:

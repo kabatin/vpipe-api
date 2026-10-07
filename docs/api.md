@@ -148,4 +148,4 @@ Output: H.264 MP4 (yuv420p, limited-range BT.709), 24 fps, **no audio track**, m
 `comment=vpipe-job:<job_id>`. vpipe writes a lossless FFV1 intermediate, so this encode is the only lossy step.
 
 Typical time on an M5 (10-core GPU, 32 GB), 6 steps: draft 124 frames ≈ 8 min, standard 124 frames ≈ 10.5 min,
-final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min. One job runs at a time.
+final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min, final 243 frames ≈ 54 min. One job runs at a time.
