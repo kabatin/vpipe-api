@@ -88,6 +88,10 @@ def test_image_size_limit() -> None:
         ((1080, 1080), "draft", (640, 640)),
         ((1080, 1350), "standard", (640, 800)),
         ((864, 1080), "draft", (512, 640)),
+        ((1920, 1080), "final", (1344, 768)),
+        ((1080, 1920), "final", (768, 1344)),
+        ((1080, 1080), "final", (768, 768)),
+        ((1080, 1350), "final", (768, 960)),
     ],
 )
 def test_generation_size(out: tuple[int, int], quality: str, expected: tuple[int, int]) -> None:
@@ -99,8 +103,10 @@ def test_estimate_grows_with_work() -> None:
     draft = wf.estimate_seconds(params(quality="draft").model_dump())
     standard = wf.estimate_seconds(params().model_dump())
     long = wf.estimate_seconds(params(frames=243).model_dump())
-    assert 350 < draft < standard < long
-    assert 400 < draft < 450  # measured ~420 s for 832x480x124 at 6 steps
+    final = wf.estimate_seconds(params(quality="final").model_dump())
+    assert draft < standard < final < long
+    assert 450 < draft < 510  # measured median 477 s for 832x480x124 at 6 steps
+    assert 1250 < final < 1400  # measured 1326 s for 1344x768x124 at 6 steps
 
 
 def test_store_inputs_writes_png_and_seed(tmp_path: Path) -> None:
@@ -144,6 +150,17 @@ def test_prepare_builds_first_last_graph(tmp_path: Path) -> None:
     assert stages["first-frame"]["config"]["width"] == 1024
     assert Path(stages["load-first"]["config"]["url"][0]).is_absolute()
     assert prepared.raw_output.is_absolute()
+
+
+def test_graph_writes_a_lossless_intermediate(tmp_path: Path) -> None:
+    opts = H3GraphOptions(**H3Options().model_dump())
+    inputs = H3GraphInputs(
+        prompt="x", width=832, height=480, frames=56, steps=4, seed=1, output=tmp_path / "o.mp4"
+    )
+    stages = {s["id"]: s for s in build_h3_spec("p", opts, inputs)["stages"]}
+    rgb = stages["rgb-to-video"]["config"]
+    assert (rgb["pix_fmt"], rgb["color_range"], rgb["colorspace"]) == ("yuv444p", "full", "bt709")
+    assert stages["save-video"]["config"]["video_codec"] == "ffv1"
 
 
 def test_graph_text_only_leaves_anchor_ports_empty(tmp_path: Path) -> None:

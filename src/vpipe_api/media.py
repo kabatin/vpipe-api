@@ -115,35 +115,28 @@ def finalize_video(
     height: int,
     comment: str,
     ffmpeg: str = "ffmpeg",
-    source_size: tuple[int, int] | None = None,
 ) -> None:
     """Scale (cover + centre crop, lanczos) to exactly ``width``x``height`` and drop audio.
+
+    Always re-encodes, even at the same size: the source is vpipe's lossless intermediate
+    (FFV1, full-range BT.709 -- see ``h3_graph``), which players cannot open. That colour
+    is stated to the scaler rather than read from the tags, which a remux can drop; the
+    output is limited-range BT.709 H.264 and tagged as such.
 
     The ``comment`` metadata makes every output byte-unique, so a consumer that
     de-duplicates by checksum never mistakes a new clip for an old one.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_suffix(".part.mp4")
-    cmd = [ffmpeg, "-y", "-v", "error", "-i", str(src), "-an"]
-    if source_size == (width, height):
-        cmd += ["-c:v", "copy"]
-    else:
-        vf = (
-            f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
-            f"crop={width}:{height},setsar=1"
-        )
-        cmd += [
-            "-vf",
-            vf,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "16",
-            "-pix_fmt",
-            "yuv420p",
-        ]
+    # setparams, not -color_* output flags: the encoder takes the tags from the frames
+    vf = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos"
+        ":in_color_matrix=bt709:in_range=pc:out_color_matrix=bt709:out_range=tv,"
+        f"crop={width}:{height},setsar=1,format=yuv420p,"
+        "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+    )
+    cmd = [ffmpeg, "-y", "-v", "error", "-i", str(src), "-an", "-vf", vf]
+    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p"]
     cmd += ["-metadata", f"comment={comment}", "-movflags", "+faststart", str(tmp)]
     _run(cmd)
     tmp.replace(dst)

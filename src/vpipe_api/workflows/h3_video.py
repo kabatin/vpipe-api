@@ -36,19 +36,22 @@ MIN_ASPECT = 9 / 16
 MAX_ASPECT = 16 / 9
 ASPECT_TOLERANCE = 0.01
 
-Quality = Literal["draft", "standard"]
+Quality = Literal["draft", "standard", "final"]
 
 # (aspect ratio, {quality: (width, height)}); all multiples of 32 inside H3's 16:9..9:16.
+# "final" is H3's training resolution (short side 768).
 GENERATION_SIZES: tuple[tuple[float, dict[str, tuple[int, int]]], ...] = (
-    (16 / 9, {"draft": (832, 480), "standard": (1024, 576)}),
-    (9 / 16, {"draft": (480, 832), "standard": (576, 1024)}),
-    (1.0, {"draft": (640, 640), "standard": (768, 768)}),
-    (4 / 5, {"draft": (512, 640), "standard": (640, 800)}),
+    (16 / 9, {"draft": (832, 480), "standard": (1024, 576), "final": (1344, 768)}),
+    (9 / 16, {"draft": (480, 832), "standard": (576, 1024), "final": (768, 1344)}),
+    (1.0, {"draft": (640, 640), "standard": (768, 768), "final": (768, 768)}),
+    (4 / 5, {"draft": (512, 640), "standard": (640, 800), "final": (768, 960)}),
 )
 
-# Measured on an M5 (10-core GPU, 32 GB), 6 steps: 832x480x124 = 420 s,
-# 1024x576x124 = 640 s, 1024x576x243 = 1460 s.  t = 70 + 350 * x^1.25 with
-# x = pixels*frames relative to 832x480x124; the denoise share scales with steps.
+# Measured on an M5 (10-core GPU, 32 GB), 6 steps: ~140 jobs at 832x480 (56 frames
+# = 256 s ... 124 = 477 s ... 243 = 998 s, medians), 1024x576x124 = 640 s,
+# 1024x576x243 = 1460 s, 1344x768x124 = 1326 s.  t = 130 + 350 * x^1.28 with
+# x = pixels*frames relative to 832x480x124 fits them within ~5% rms (runs drift ~10%
+# from day to day); the denoise share scales with steps.
 _BASE_WORK = 832 * 480 * 124
 
 
@@ -103,7 +106,11 @@ class H3VideoParams(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     output: OutputSize
     frames: int = Field(default=124, ge=MIN_FRAMES, le=MAX_FRAMES, description="17n+5")
-    quality: Quality = "standard"
+    quality: Quality = Field(
+        default="standard",
+        description="generation size tier: draft (fast preview), standard, or final "
+        "(H3's training resolution, short side 768; about 3x the time of draft at 16:9)",
+    )
     seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
     steps: int = Field(default=6, ge=4, le=8)
     start_image: ImageInput | None = None
@@ -216,7 +223,7 @@ class H3VideoWorkflow(Workflow):
         width, height = generation_size(out["width"], out["height"], params["quality"])
         work = width * height * params["frames"] / _BASE_WORK
         step_factor = 0.23 + 0.77 * params["steps"] / 6
-        return 70 + 350 * work**1.25 * step_factor
+        return 130 + 350 * work**1.28 * step_factor
 
     def prepare(self, job_id: str, params: Mapping[str, Any], job_dir: Path) -> PreparedRun:
         out = params["output"]
@@ -264,7 +271,6 @@ class H3VideoWorkflow(Workflow):
                 height=out["height"],
                 comment=f"vpipe-job:{job_id}",
                 ffmpeg=self.media.ffmpeg,
-                source_size=(raw.width, raw.height),
             )
             info = probe_video(final, self.media.ffprobe)
         except MediaError as exc:

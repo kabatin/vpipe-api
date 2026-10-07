@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `quality: "final"`: H3's training resolution (short side 768; 1344×768 for 16:9), about 3× the time of `draft`.
+- vpipe now writes a lossless intermediate (FFV1, 4:4:4, full-range BT.709) instead of 2 Mbps H.264, so the final
+  encode is the only lossy step. The final encode always runs (it used to be a stream copy at the same size) and
+  converts to limited-range BT.709, tagged as such (the output used to carry BT.601 / mixed tags).
+- Time estimates refit to ~140 measured jobs (they ran up to ~20 % low).
+- WebP start/end images decode (Pillow was handed an MPO decoder that does not exist, which ended the lookup).
+
 ## 0.1.0 — 2026-09-30
 
 First release.

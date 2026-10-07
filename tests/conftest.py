@@ -60,7 +60,10 @@ FAKE_VPIPE = textwrap.dedent(
                     "-f", "lavfi", "-i", f"testsrc=size={size}:rate=24",
                     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=32000",
                     "-frames:v", str(gen["frames"]), "-shortest",
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", out], check=True)
+                    "-vf", "scale=out_range=pc:out_color_matrix=bt709,format=yuv444p,"
+                           "setparams=range=pc:colorspace=bt709:color_primaries=bt709:color_trc=bt709",
+                    "-c:v", "ffv1", "-pix_fmt", "yuv444p", "-color_range", "pc",
+                    "-c:a", "aac", out], check=True)
     print("[INFO] PipelineRuntime: pipeline 'x' ran for 1 s", flush=True)
     """
 )

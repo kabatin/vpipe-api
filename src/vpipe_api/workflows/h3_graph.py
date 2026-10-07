@@ -140,12 +140,24 @@ def build_h3_spec(pipeline_id: str, opts: H3GraphOptions, inp: H3GraphInputs) ->
             {},
         ),
         _stage("vae-decode", "vae-decode", [_port("generate-video", 0), _port("model-select")], {}),
-        _stage("rgb-to-video", "rgb-to-video", [_port("vae-decode")], {"fps": FPS}),
+        # Lossless intermediate, as vpipe's own extend pipelines write it: 4:4:4 full-range
+        # BT.709 FFV1, so vpipe-api's final H.264 encode is the only lossy step.
+        _stage(
+            "rgb-to-video",
+            "rgb-to-video",
+            [_port("vae-decode")],
+            {"fps": FPS, "pix_fmt": "yuv444p", "color_range": "full", "colorspace": "bt709"},
+        ),
         _stage(
             "save-video",
             "save-video",
             [_port("rgb-to-video"), _port("audio-vae-decode")],
-            {"output_url": str(inp.output), "enable_video": True, "enable_audio": True},
+            {
+                "output_url": str(inp.output),
+                "enable_video": True,
+                "enable_audio": True,
+                "video_codec": "ffv1",
+            },
         ),
     ]
     return {"id": pipeline_id, "stages": stages, "subpipelines": []}

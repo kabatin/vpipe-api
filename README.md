@@ -33,13 +33,13 @@ to exactly the resolution you ask for; audio is dropped.
 
 | | |
 |---|---|
-| Output | any size 64–4096 px, aspect 16:9 … 9:16; H.264 MP4, 24 fps, no audio |
+| Output | any size 64–4096 px, aspect 16:9 … 9:16; H.264 MP4 (BT.709), 24 fps, no audio |
 | Length | `frames` = 17n+5: 56 (2.33 s) … 243 (10.125 s) |
-| Quality tiers | `draft` (e.g. 832×480 for 16:9) · `standard` (1024×576) |
+| Quality tiers | `draft` (e.g. 832×480 for 16:9) · `standard` (1024×576) · `final` (1344×768, H3's training size) |
 | Anchors | `start_image`, `end_image` (base64 PNG/JPEG/WebP ≤ 20 MB; end needs start) |
 
-Measured on an M5 MacBook Pro (10-core GPU, 32 GB), 6 steps: draft 124 frames ≈ 7 min,
-standard 124 frames ≈ 10.5 min, standard 243 frames ≈ 24 min.
+Measured on an M5 MacBook Pro (10-core GPU, 32 GB), 6 steps: draft 124 frames ≈ 8 min,
+standard 124 frames ≈ 10.5 min, final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min.
 
 > **License note.** The MiniMax H3 weights are under the *MiniMax H3 Community License*, which does not permit use
 > in the United States, the European Union, the United Kingdom or South Korea, and has its own terms for
