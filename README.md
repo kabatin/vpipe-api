@@ -103,7 +103,7 @@ vpipe-api serve              # http://127.0.0.1:8765  (docs at /docs)
 ```sh
 API=http://127.0.0.1:8765        # with a token, add -H "Authorization: Bearer $TOKEN" to each curl
 JOB=$(curl -s -X POST "$API/v1/workflows/minimax-h3-turbo-video/jobs" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: first-job' \
+  -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
   -d '{"prompt": "A small wooden boat drifting on a calm lake at dawn.",
        "output": {"width": 1280, "height": 720}, "quality": "draft"}' | jq -r .id)
 curl -s "$API/v1/jobs/$JOB" | jq '{status, progress}'     # repeat until "succeeded"

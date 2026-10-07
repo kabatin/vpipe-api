@@ -113,7 +113,7 @@ vpipe-api serve              # http://127.0.0.1:8765（仕様は /docs）
 ```sh
 API=http://127.0.0.1:8765        # トークンを設定したら、各 curl に -H "Authorization: Bearer $TOKEN" を足す
 JOB=$(curl -s -X POST "$API/v1/workflows/minimax-h3-turbo-video/jobs" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: first-job' \
+  -H 'Content-Type: application/json' -H "Idempotency-Key: $(uuidgen)" \
   -d '{"prompt": "A small wooden boat drifting on a calm lake at dawn.",
        "output": {"width": 1280, "height": 720}, "quality": "draft"}' | jq -r .id)
 curl -s "$API/v1/jobs/$JOB" | jq '{status, progress}'     # "succeeded" になるまで繰り返す
