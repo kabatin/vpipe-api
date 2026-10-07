@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-07
 
 - `quality: "final"`: H3's training resolution (short side 768; 1344×768 for 16:9), about 3× the time of `draft`.
 - vpipe now writes a lossless intermediate (FFV1, 4:4:4, full-range BT.709) instead of 2 Mbps H.264, so the final
   encode is the only lossy step. The final encode always runs (it used to be a stream copy at the same size) and
   converts to limited-range BT.709, tagged as such (the output used to carry BT.601 / mixed tags).
-- Time estimates refit to ~140 measured jobs (they ran up to ~20 % low).
+- Time estimates refit to ~140 measured jobs, `final` at 124 and 243 frames included (they ran up to ~20 % low).
+  Job timeouts and `Retry-After` follow the new estimates.
 - WebP start/end images decode (Pillow was handed an MPO decoder that does not exist, which ended the lookup).
+- Docs: a first job with curl, how to update, every config key, measured times and memory for each tier.
 
 ## 0.1.0 — 2026-09-30
 
@@ -22,7 +24,8 @@ First release.
 - Workflow `minimax-h3-turbo-video`: MiniMax H3 FL2VA 8-bit + Turbo LoRA, text / first-last-frame to video,
   exact output size via lanczos cover-crop, audio dropped, per-job metadata tag.
 - `vpipe-api doctor [--smoke]`, `setup vpipe`, `setup models <workflow>` (download watchdog), `workflows`, `config`.
-- `Idempotency-Key` on submit (same key + params → same job, `200`); busy gate answers `429` before the body.
+- `Idempotency-Key` on submit (same key + params → same job, `200`; the same key while the first request is still
+  being accepted → retryable `409 idempotency_in_flight`); busy gate answers `429` before the body.
 - Hardening: token-less mode serves loopback Host names only and refuses proxied requests; tokens ≥ 32
   printable ASCII; strict job ids; inputs deleted once a job ends or is canceled; Pillow limited to
   PNG/JPEG(MPO)/WebP decoders; client-facing errors hide paths and internals; `doctor` flags a

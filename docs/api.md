@@ -40,7 +40,7 @@ Every non-2xx response uses the same shape:
 ### `GET /v1/health`
 
 ```json
-{ "status": "ok", "version": "0.1.0", "running": 1, "waiting": 0, "max_waiting": 1 }
+{ "status": "ok", "version": "0.1.1", "running": 1, "waiting": 0, "max_waiting": 1 }
 ```
 
 ### `GET /v1/workflows`
