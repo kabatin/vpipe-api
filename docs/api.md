@@ -50,7 +50,7 @@ Every non-2xx response uses the same shape:
   "workflows": [
     {
       "id": "minimax-h3-turbo-video",
-      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text / first-last-frame to video",
+      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, scaled to the requested size, no audio",
       "params_schema": { "...": "JSON Schema of the POST body" },
       "output_media_type": "video/mp4"
     }

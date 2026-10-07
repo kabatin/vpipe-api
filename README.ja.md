@@ -1,5 +1,9 @@
 # vpipe-api
 
+[![ci](https://github.com/kabatin/vpipe-api/actions/workflows/ci.yml/badge.svg)](https://github.com/kabatin/vpipe-api/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![macOS 26+ · Apple Silicon](https://img.shields.io/badge/macOS_26%2B-Apple_Silicon-lightgrey.svg)
+
 **[vpipe](https://github.com/tgo-app-dev/vpipe) の生成パイプラインを、Apple Silicon Mac 上の HTTP ジョブ API として公開する。**
 
 [English](README.md) | 日本語
@@ -41,20 +45,18 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 
 | | |
 |---|---|
-| 出力 | 64〜4096px の任意サイズ、比率は 16:9〜9:16。H.264 MP4（BT.709）、24fps、音声なし |
+| 出力 | 64〜4096px の任意サイズ、比率は 16:9〜9:16。H.264 MP4（limited range の BT.709）、24fps、音声なし。vpipe の中間ファイルは可逆なので、劣化するのはこの最後の圧縮だけ |
 | 長さ | `frames` は 17n+5：56（2.33 秒）〜243（10.125 秒） |
 | 画質段 | `draft`（16:9 なら 832×480）・`standard`（1024×576）・`final`（1344×768。H3 の学習時の解像度） |
 | 開始・終了フレーム | `start_image`・`end_image`（base64 の PNG/JPEG/WebP、20MB 以下。終了フレームには開始フレームが必須） |
 
 実測（M5 MacBook Pro、GPU 10 コア、32GB、6 ステップ）
 
-| 設定 | 時間 |
-|---|---|
-| draft・124 フレーム | 約 8 分 |
-| standard・124 フレーム | 約 10.5 分 |
-| final・124 フレーム | 約 22 分 |
-| standard・243 フレーム | 約 24 分 |
-| final・243 フレーム | 約 54 分 |
+| | 124 フレーム（5.2 秒） | 243 フレーム（10.1 秒） |
+|---|---|---|
+| `draft` | 約 8 分 | 約 17 分 |
+| `standard` | 約 10.5 分 | 約 24 分 |
+| `final` | 約 22 分 | 約 54 分 |
 
 > **ライセンスの注意**
 > - MiniMax H3 の重みは *MiniMax H3 Community License* に従う
@@ -67,7 +69,8 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 - Apple Silicon Mac、macOS 26 以降
 - ディスク：H3 で約 65GB（準備中は最大 185GB）
 - Python 3.12 以降と [uv](https://docs.astral.sh/uv/)、`ffmpeg`/`ffprobe`、Xcode（vpipe のビルド用）、`cmake`
-- メモリは 16GB でも動く。多いほど重みの読み直しが減って速くなる
+- curl の例を試すなら `jq`
+- メモリは 16GB でも動く。多いほど重みの読み直しが減って速くなる（いちばん食うのは `final`。[運用上の注意](#運用上の注意)を参照）
 
 ## 導入
 
@@ -105,6 +108,30 @@ vpipe-api doctor --smoke     # 環境の点検と、ごく短い生成を 1 本
 vpipe-api serve              # http://127.0.0.1:8765（仕様は /docs）
 ```
 
+### 4. 最初のジョブ
+
+```sh
+API=http://127.0.0.1:8765        # トークンを設定したら、各 curl に -H "Authorization: Bearer $TOKEN" を足す
+JOB=$(curl -s -X POST "$API/v1/workflows/minimax-h3-turbo-video/jobs" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: first-job' \
+  -d '{"prompt": "A small wooden boat drifting on a calm lake at dawn.",
+       "output": {"width": 1280, "height": 720}, "quality": "draft"}' | jq -r .id)
+curl -s "$API/v1/jobs/$JOB" | jq '{status, progress}'     # "succeeded" になるまで繰り返す
+curl -s -o clip.mp4 "$API/v1/jobs/$JOB/output"
+```
+
+開始・終了フレームの指定、取り消し、`429 busy` の扱いは [examples/curl.md](examples/curl.md) にある。
+
+### 更新
+
+```sh
+uv tool upgrade vpipe-api    # main の最新を入れる
+```
+
+そのあと `vpipe-api serve` を再起動する。先に `/v1/health` が `"running": 0` になるのを待つこと：
+- 再起動のときに実行中だったジョブは、再試行できる失敗（`server_restarted`）で終わる
+- 待ち行列のジョブは、再起動後にそのまま続く
+
 ## 設定
 
 `~/.config/vpipe-api/config.toml`（または `$VPIPE_API_CONFIG`）に書く。単一の値は `VPIPE_API_<名前>` の環境変数でも指定できる。
@@ -112,6 +139,7 @@ vpipe-api serve              # http://127.0.0.1:8765（仕様は /docs）
 | キー | 既定値 | |
 |---|---|---|
 | `vpipe_bin`, `work_dir` | — | serve に必須 |
+| `vpipe_src_dir` | `vpipe_bin` をビルドしたフォルダ | vpipe のソース。`setup models` がここのパイプライン定義を読む |
 | `host` / `port` | `127.0.0.1` / `8765` | ループバック以外で待ち受けるなら `token` が**必須** |
 | `token` | — | 設定すると、すべてのリクエストに `Authorization: Bearer <token>` が必要 |
 | `max_waiting` | `1` | 実行中のジョブの後ろで待てる件数 |
@@ -119,12 +147,13 @@ vpipe-api serve              # http://127.0.0.1:8765（仕様は /docs）
 | `data_dir` | `~/.local/share/vpipe-api` | ジョブの記録と出力を置く場所 |
 | `job_timeout_factor` | `3.0` | 「見積もり × この値 ＋ 5 分」を過ぎたジョブは止める |
 | `max_body_mb` | `64` | リクエストの大きさの上限 |
+| `ffmpeg` / `ffprobe` | `ffmpeg` / `ffprobe` | 後処理に使うコマンド。`PATH` から探す |
 
 ワークフローごとの設定：
 
 ```toml
 [workflows."minimax-h3-turbo-video"]
-sol_attn = false          # 最終版は正確な attention で（遅くなる）
+sol_attn = false          # 高速な近似をやめて正確な attention に。全ジョブに効く（遅くなる）
 i8_gemm  = true           # M5 以降の matrix core を使う
 lora     = "larryvrh/MiniMax-H3-Turbo-Lora-v4-600-ema"
 ```
@@ -164,6 +193,7 @@ vpipe-api serve
 ## 運用上の注意
 
 - 重い処理は 1 つずつ。Metal のメモリは固定で確保されるので、生成中に大きな GPU アプリ（書き出し、ローカル LLM など）を動かすと、両方が遅くなるかメモリが尽きる
+- いちばん重いのは `final` × 243 フレーム。32GB の M5 では、空きメモリが最小 18% まで減り、スワップは 9.7GB から 14.8GB に増えた（生成は問題なく完了）。16GB の Mac では、長い `final` に頼る前に短い `final` で試すこと
 - 長いバッチは電源につないで回す。バッテリーだと性能が落ち、すぐに減る
 - ファンの無い Mac は、長いクリップで熱のため遅くなる。上の表より時間がかかる前提で
 
