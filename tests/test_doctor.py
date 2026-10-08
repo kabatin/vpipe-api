@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import install_models, needs_ffmpeg
+from tests.fakes import EchoWorkflow
 from vpipe_api import doctor
-from vpipe_api.doctor import Level, check_memory, check_power, run_doctor
+from vpipe_api.doctor import Level, check_memory, check_models, check_power, run_doctor
 from vpipe_api.settings import Settings, load_settings
 from vpipe_api.workflows import build_registry
+from vpipe_api.workflows.base import RequiredModel
 
 
 def fake_run(outputs: dict[str, str]):
@@ -48,6 +50,33 @@ def test_missing_models_fail(settings: Settings, healthy: None) -> None:
     model = checks["model local/MiniMax-H3-FL2VA-8bit"]
     assert model.level is Level.FAIL and "setup models" in model.detail
     assert checks["power"].level is Level.OK and checks["memory"].level is Level.OK
+
+
+class _NeedsA(EchoWorkflow):
+    id = "needs-a"
+
+    @property
+    def required_models(self) -> tuple[RequiredModel, ...]:
+        return (RequiredModel(key="org/a", path="org/a", files=("a.bin",)),)
+
+
+class _NeedsB(_NeedsA):
+    id = "needs-b"
+
+    @property
+    def required_models(self) -> tuple[RequiredModel, ...]:
+        return (RequiredModel(key="org/b", path="org/b", files=("b.bin",)),)
+
+
+def test_a_workflow_without_its_models_warns_while_another_can_run(
+    settings: Settings, work_dir: Path
+) -> None:
+    workflows = [_NeedsA(), _NeedsB()]
+    assert {c.level for c in check_models(settings, workflows)} == {Level.FAIL}  # nothing can run
+    (work_dir / "models" / "org" / "a").mkdir(parents=True)
+    (work_dir / "models" / "org" / "a" / "a.bin").write_bytes(b"x")
+    levels = {c.name: c.level for c in check_models(settings, workflows)}
+    assert levels == {"model org/a": Level.OK, "model org/b": Level.WARN}
 
 
 def test_all_present(settings: Settings, work_dir: Path, healthy: None) -> None:
@@ -93,6 +122,22 @@ def test_smoke_runs_a_tiny_job(settings: Settings, work_dir: Path, healthy: None
     smoke = checks["smoke minimax-h3-turbo-video"]
     assert smoke.level is Level.OK and "832x480 56 frames" in smoke.detail
     assert not any((settings.data_dir / "smoke").iterdir())
+    upscale = checks["smoke flashvsr-upscale"]
+    assert upscale.level is Level.OK and "21 frames" in upscale.detail
+
+
+@needs_ffmpeg
+def test_smoke_skips_a_workflow_without_its_models(
+    settings: Settings, work_dir: Path, healthy: None
+) -> None:
+    import shutil
+
+    install_models(work_dir)
+    shutil.rmtree(work_dir / "models" / "JunhaoZhuang")
+    checks = by_name(run_doctor(settings, build_registry(settings), smoke=True))
+    assert checks["smoke minimax-h3-turbo-video"].level is Level.OK
+    skipped = checks["smoke flashvsr-upscale"]
+    assert skipped.level is Level.WARN and "model missing" in skipped.detail
 
 
 def test_smoke_failure_keeps_log(
@@ -104,3 +149,19 @@ def test_smoke_failure_keeps_log(
         "smoke minimax-h3-turbo-video"
     ]
     assert smoke.level is Level.FAIL and "vpipe.log" in smoke.detail
+
+
+def test_smoke_reports_a_workflow_that_cannot_build_its_params(
+    settings: Settings, work_dir: Path, healthy: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vpipe_api.workflows.flashvsr import FlashVsrWorkflow
+
+    install_models(work_dir)
+
+    def broken(self: FlashVsrWorkflow) -> dict:
+        raise RuntimeError("ffmpeg has no libx264")
+
+    monkeypatch.setattr(FlashVsrWorkflow, "smoke_params", broken)
+    checks = by_name(run_doctor(settings, build_registry(settings), smoke=True))
+    smoke = checks["smoke flashvsr-upscale"]
+    assert smoke.level is Level.FAIL and "libx264" in smoke.detail

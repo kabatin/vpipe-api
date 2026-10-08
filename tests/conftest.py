@@ -55,6 +55,20 @@ FAKE_VPIPE = textwrap.dedent(
         sys.exit(0)
     gen = stages["generate-video"]["config"]
     out = stages["save-video"]["config"]["output_url"]
+    if "flashvsr-src-encoder" in stages:
+        # like FlashVSR: 21 frames back per 25-frame group, the last 4 frames never return
+        src = stages["load-video"]["config"]["input_url"]
+        count = subprocess.run(["ffprobe", "-v", "error", "-count_packets", "-select_streams", "v",
+                                "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", src],
+                               capture_output=True, text=True, check=True).stdout
+        keep = 21 * ((int(count) - 4) // 21)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", src,
+                        "-vf", f"select='lt(n\\,{keep})',"
+                               f"scale={gen['width']}:{gen['height']}:out_range=pc,format=yuv444p",
+                        "-fps_mode", "passthrough", "-c:v", "ffv1", "-color_range", "pc", out],
+                       check=True)
+        print("[INFO] PipelineRuntime: pipeline 'x' ran for 1 s", flush=True)
+        sys.exit(0)
     size = f"{gen['width']}x{gen['height']}"
     subprocess.run(["ffmpeg", "-v", "error", "-y",
                     "-f", "lavfi", "-i", f"testsrc=size={size}:rate=24",
@@ -113,10 +127,11 @@ def make_png(path: Path, size: tuple[int, int] = (64, 48), color: str = "red") -
 
 
 def install_models(work_dir: Path) -> None:
-    """Create the files ``minimax-h3-turbo-video`` expects, so doctor/setup see them."""
+    """Create the files the built-in workflows expect, so doctor/setup see them."""
+    from vpipe_api.workflows.flashvsr import _DEFAULT_MODEL
     from vpipe_api.workflows.h3_video import _DEFAULT_MODELS
 
-    for model in _DEFAULT_MODELS:
+    for model in (*_DEFAULT_MODELS, _DEFAULT_MODEL):
         root = work_dir / "models" / model.path
         for name in model.files:
             (root / name).parent.mkdir(parents=True, exist_ok=True)

@@ -63,28 +63,54 @@ class JobRecord(BaseModel):
     # Idempotency-Key sent with the submit, and a hash of the submitted params
     idempotency_key: str | None = None
     fingerprint: str | None = None
+    # The workflow's own estimate of the run, set at submit (same name as wan-api)
+    estimate_seconds: float | None = None
+    # Wall-clock seconds measured by the server, same keys as wan-api: queue_seconds,
+    # backend_seconds (the vpipe run), postprocess_seconds, total_seconds
+    timings: dict[str, float] = Field(default_factory=dict)
 
     def started(self) -> JobRecord:
-        return self.model_copy(update={"status": JobStatus.RUNNING, "started_at": utcnow()})
-
-    def succeeded(self, result: dict[str, Any], output_file: str) -> JobRecord:
+        now = utcnow()
         return self.model_copy(
             update={
-                "status": JobStatus.SUCCEEDED,
-                "finished_at": utcnow(),
-                "result": result,
-                "output_file": output_file,
+                "status": JobStatus.RUNNING,
+                "started_at": now,
+                "timings": {"queue_seconds": _seconds(self.created_at, now)},
             }
         )
 
-    def failed(self, code: str, message: str, *, retryable: bool) -> JobRecord:
+    def succeeded(
+        self, result: dict[str, Any], output_file: str, timings: dict[str, float] | None = None
+    ) -> JobRecord:
+        return self._finish(JobStatus.SUCCEEDED, timings, result=result, output_file=output_file)
+
+    def failed(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        timings: dict[str, float] | None = None,
+    ) -> JobRecord:
+        error = JobError(code=code, message=message, retryable=retryable)
+        return self._finish(JobStatus.FAILED, timings, error=error)
+
+    def canceled(self, timings: dict[str, float] | None = None) -> JobRecord:
+        return self._finish(JobStatus.CANCELED, timings)
+
+    def _finish(
+        self, status: JobStatus, timings: dict[str, float] | None, **update: Any
+    ) -> JobRecord:
+        now = utcnow()
+        merged = {
+            **self.timings,
+            **(timings or {}),
+            "total_seconds": _seconds(self.created_at, now),
+        }
         return self.model_copy(
-            update={
-                "status": JobStatus.FAILED,
-                "finished_at": utcnow(),
-                "error": JobError(code=code, message=message, retryable=retryable),
-            }
+            update={"status": status, "finished_at": now, "timings": merged, **update}
         )
 
-    def canceled(self) -> JobRecord:
-        return self.model_copy(update={"status": JobStatus.CANCELED, "finished_at": utcnow()})
+
+def _seconds(start: datetime, end: datetime) -> float:
+    return round((end - start).total_seconds(), 3)

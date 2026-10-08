@@ -89,6 +89,10 @@ class _Running:
 _USER_DIR = re.compile(r"/(?:Users|home)/[^/\s'\"]+")
 
 
+def _since(began: float) -> float:
+    return round(time.monotonic() - began, 3)
+
+
 def redact(message: str) -> str:
     """Hide the server's home directory in messages that reach clients."""
     return _USER_DIR.sub("~", message.replace(str(Path.home()), "~"))
@@ -98,14 +102,6 @@ def fingerprint(workflow_id: str, params: BaseModel) -> str:
     digest = hashlib.sha256(workflow_id.encode())
     digest.update(params.model_dump_json().encode())
     return digest.hexdigest()
-
-
-def _phase_progress(phase: str, fraction: float) -> float | None:
-    if phase == "denoise":
-        return round(0.05 + 0.85 * fraction, 3)
-    if phase == "vae decode":
-        return round(0.9 + 0.09 * fraction, 3)
-    return None
 
 
 class JobQueue:
@@ -210,7 +206,10 @@ class JobQueue:
         job_dir = self._store.job_dir(record.id)
         try:
             stored = workflow.store_inputs(params, job_dir)
-            record = self._store.save(record.model_copy(update={"params": stored}))
+            estimate = round(workflow.estimate_seconds(stored), 1)
+            record = self._store.save(
+                record.model_copy(update={"params": stored, "estimate_seconds": estimate})
+            )
         except BaseException:
             shutil.rmtree(job_dir, ignore_errors=True)
             with self._cond:
@@ -333,7 +332,15 @@ class JobQueue:
             self._execute(workflow, record)
 
     def _execute(self, workflow: Workflow, record: JobRecord) -> None:
-        estimate = workflow.estimate_seconds(record.params)
+        try:
+            estimate = workflow.estimate_seconds(record.params)
+            mapper = workflow.progress_mapper(record.params)
+        except Exception:  # a workflow bug fails this job; the worker carries on
+            log.exception("job %s: workflow failed before the run", record.id)
+            message = "internal error (see the server log)"
+            self._store.save(record.failed("internal", message, retryable=False))
+            self._store.discard_inputs(record.id)
+            return
         running = _Running(record.id, time.monotonic(), estimate, threading.Event())
         with self._cond:
             self._running = running
@@ -342,12 +349,13 @@ class JobQueue:
         job_dir = self._store.job_dir(record.id)
 
         def on_progress(phase: str, fraction: float) -> None:
-            value = _phase_progress(phase, fraction)
+            value = mapper(phase, fraction)
             if value is not None:
                 with self._cond:
                     self._progress[record.id] = value
 
         prepared: PreparedRun | None = None
+        timings: dict[str, float] = {}
         try:
             prepared = workflow.prepare(record.id, record.params, job_dir)
             result = self._runner.run(
@@ -358,25 +366,29 @@ class JobQueue:
                 cancel=running.cancel,
                 on_progress=on_progress,
             )
+            timings = {"backend_seconds": round(result.duration_s, 3)}
             if result.canceled:
-                self._store.save(record.canceled())
+                self._store.save(record.canceled(timings))
             elif not result.ok:
                 code = "timeout" if result.timed_out else "generation_failed"
-                self._store.save(
-                    record.failed(code, redact(result.describe_failure()), retryable=True)
-                )
+                message = redact(result.describe_failure())
+                self._store.save(record.failed(code, message, retryable=True, timings=timings))
             else:
+                began = time.monotonic()
                 output = workflow.finalize(record.id, record.params, job_dir, prepared)
+                timings = {**timings, "postprocess_seconds": _since(began)}
                 rel = str(output.file.relative_to(job_dir))
-                self._store.save(record.succeeded(output.result, rel))
+                self._store.save(record.succeeded(output.result, rel, timings))
         except WorkflowFailedError as exc:
-            self._store.save(record.failed(exc.code, redact(str(exc)), retryable=exc.retryable))
+            message = redact(str(exc))
+            self._store.save(
+                record.failed(exc.code, message, retryable=exc.retryable, timings=timings)
+            )
         except Exception:
             log.exception("job %s crashed", record.id)
             # details go to the server log only
-            self._store.save(
-                record.failed("internal", "internal error (see the server log)", retryable=True)
-            )
+            message = "internal error (see the server log)"
+            self._store.save(record.failed("internal", message, retryable=True, timings=timings))
         finally:
             raw = [prepared.raw_output.name] if prepared is not None else []
             self._store.discard_inputs(record.id, *raw)

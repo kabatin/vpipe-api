@@ -11,6 +11,7 @@ def test_defaults_without_file_or_env(tmp_path: Path) -> None:
     assert s.port == 8765
     assert s.token is None
     assert s.max_waiting == 1
+    assert s.max_body_mb == 96  # a 64 MB source video is ~86 MB as base64
     assert s.vpipe_bin is None
 
 

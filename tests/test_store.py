@@ -43,6 +43,27 @@ def test_transitions_are_immutable() -> None:
     assert failed.error is not None and failed.error.retryable
 
 
+def test_timings_follow_the_transitions() -> None:
+    record = JobRecord(workflow="w", params={}, created_at=utcnow() - timedelta(seconds=30))
+    assert record.timings == {}
+    running = record.started()
+    assert running.timings.keys() == {"queue_seconds"}
+    assert 29 < running.timings["queue_seconds"] < 31
+    done = running.succeeded({}, "o.mp4", {"backend_seconds": 12.5, "postprocess_seconds": 1.25})
+    assert done.timings["queue_seconds"] == running.timings["queue_seconds"]
+    assert (done.timings["backend_seconds"], done.timings["postprocess_seconds"]) == (12.5, 1.25)
+    assert done.timings["total_seconds"] >= done.timings["queue_seconds"]
+    failed = running.failed("c", "m", retryable=True, timings={"backend_seconds": 3.0})
+    assert failed.timings.keys() == {"queue_seconds", "backend_seconds", "total_seconds"}
+    assert record.canceled().timings.keys() == {"total_seconds"}
+
+
+def test_records_written_before_timings_still_load() -> None:
+    old = {"workflow": "w", "params": {}, "status": "succeeded"}
+    assert JobRecord.model_validate(old).timings == {}
+    assert JobRecord.model_validate(old).estimate_seconds is None
+
+
 def test_recover_after_restart(tmp_path: Path) -> None:
     store = JobStore(tmp_path)
     queued = store.save(JobRecord(workflow="w", params={}))

@@ -8,7 +8,6 @@ exactly the requested output size. Audio is always dropped.
 from __future__ import annotations
 
 import base64
-import binascii
 import math
 import secrets
 from collections.abc import Mapping
@@ -28,13 +27,11 @@ from vpipe_api.workflows.base import (
     WorkflowOutput,
 )
 from vpipe_api.workflows.h3_graph import FPS, H3GraphInputs, H3GraphOptions, build_h3_spec
+from vpipe_api.workflows.inputs import OutputSize, decode_base64
 
 MIN_FRAMES = 56  # 17*3+5  -> 2.33 s
 MAX_FRAMES = 243  # 17*14+5 -> 10.125 s
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
-MIN_ASPECT = 9 / 16
-MAX_ASPECT = 16 / 9
-ASPECT_TOLERANCE = 0.01
 
 Quality = Literal["draft", "standard", "final"]
 
@@ -70,32 +67,11 @@ class ImageInput(BaseModel):
     @field_validator("data")
     @classmethod
     def _decodable(cls, value: str) -> str:
-        try:
-            raw = base64.b64decode(value, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("data is not valid base64") from exc
-        if not raw:
-            raise ValueError("data is empty")
-        if len(raw) > MAX_IMAGE_BYTES:
-            raise ValueError(f"image larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+        decode_base64(value, MAX_IMAGE_BYTES, "image")
         return value
 
     def decoded(self) -> bytes:
         return base64.b64decode(self.data, validate=True)
-
-
-class OutputSize(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    width: int = Field(ge=64, le=4096)
-    height: int = Field(ge=64, le=4096)
-
-    @model_validator(mode="after")
-    def _aspect(self) -> OutputSize:
-        ratio = self.width / self.height
-        if not (MIN_ASPECT - ASPECT_TOLERANCE <= ratio <= MAX_ASPECT + ASPECT_TOLERANCE):
-            raise ValueError("aspect ratio must be between 9:16 and 16:9")
-        return self
 
 
 class H3VideoParams(BaseModel):

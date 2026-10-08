@@ -19,10 +19,10 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 ```
 
 - **ワークフロー登録式**
-  - 呼び出し側が選べるのは、名前付きで検証済みの手順（`minimax-h3-turbo-video`）だけ
+  - 呼び出し側が選べるのは、名前付きで検証済みの手順（`minimax-h3-turbo-video`、`flashvsr-upscale`）だけ
   - 生のパイプライン JSON は受け付けない。LAN に公開しても、任意のファイルを読み書きさせられることはない
 - **GPU は 1 枠。混んでいるときは正直に断る**
-  - ジョブは 1 件ずつ処理する
+  - ジョブは種類を問わず 1 件ずつ処理する。超解像が生成と同時に走ることはない
   - 実行中の 1 件と、待ち行列（既定 1 件）が埋まっていたら、`429 busy` と `Retry-After` を返す
   - 何時間分もの仕事を黙って溜め込まない
 - **失敗を本当に検知する**
@@ -64,10 +64,34 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 > - 取得するすべてのモデルについて、出力を使う前にライセンスを確認すること
 > - vpipe-api 自体は Apache-2.0 で、重みは一切再配布しない
 
+## ワークフロー：`flashvsr-upscale`
+
+[FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1)（Apache-2.0）で、送った動画を超解像する。
+主な用途は、上のワークフローで作ったクリップの仕上げ。
+- 指定したサイズちょうどで返す
+- コマ数・フレームレート・音声は元のまま。上げたクリップを、タイムラインの同じ位置にそのまま置ける
+
+| | |
+|---|---|
+| 入力 | `source_video`：base64 の MP4。8bit・SDR の H.264/HEVC の映像（＋AAC の音声）、64MB 以下、40 秒以下、60fps 以下 |
+| 出力 | `output` のサイズ（既定は元の比率で長辺 1920）。H.264 MP4（limited range の BT.709）。コマ数・fps・音声は元のまま |
+| 処理 | 出力の比率に中央で切り抜き、FlashVSR の 128 ピクセル刻みで処理（1920×1080 なら 1920×1152。画素数はこれが上限）、出力サイズに戻す |
+
+```sh
+base64 -i take.mp4 > take.b64        # Linux では base64 -w0 take.mp4 > take.b64
+jq -n --rawfile v take.b64 '{source_video: {data: ($v | rtrimstr("\n")), media_type: "video/mp4"},
+                             output: {width: 1920, height: 1080}}' > body.json
+curl -s -X POST "$API/v1/workflows/flashvsr-upscale/jobs" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: take-123-upscale' --data-binary @body.json      # あとは「最初のジョブ」と同じく問い合わせて受け取る
+```
+
+時間は元の 21 コマ（FlashVSR の 1 グループ）ごとに増える。上の M5 で 1920×1152 なら 1 グループ約 104 秒（42 コマで約 3.5 分、56 コマで約 5.2 分）。
+メモリは `final` と同じくらい使う。投げ方と詳細は [docs/api.md](docs/api.md#workflow-flashvsr-upscale)。
+
 ## 必要なもの
 
 - Apple Silicon Mac、macOS 26 以降
-- ディスク：H3 で約 65GB（準備中は最大 185GB）
+- ディスク：H3 で約 65GB（準備中は最大 185GB）、FlashVSR でさらに約 6.8GB
 - Python 3.12 以降と [uv](https://docs.astral.sh/uv/)、`ffmpeg`/`ffprobe`、Xcode（vpipe のビルド用）、`cmake`
 - curl の例を試すなら `jq`
 - メモリは 16GB でも動く。多いほど重みの読み直しが減って速くなる（いちばん食うのは `final`。[運用上の注意](#運用上の注意)を参照）
@@ -95,6 +119,7 @@ work_dir  = "/Users/you/vpipe/work"              # モデルとその登録簿�
 
 ```sh
 vpipe-api setup models minimax-h3-turbo-video     # 約 118GB を取得し、8bit に量子化する
+vpipe-api setup models flashvsr-upscale           # 任意：約 6.8GB、そのまま使う
 ```
 
 - ダウンロードは、止まったところから再開できる
@@ -146,7 +171,7 @@ uv tool upgrade vpipe-api    # main の最新を入れる
 | `retention_days` | `7` | 終わったジョブと出力は、この日数が過ぎたら消える |
 | `data_dir` | `~/.local/share/vpipe-api` | ジョブの記録と出力を置く場所 |
 | `job_timeout_factor` | `3.0` | 「見積もり × この値 ＋ 5 分」を過ぎたジョブは止める |
-| `max_body_mb` | `64` | リクエストの大きさの上限 |
+| `max_body_mb` | `96` | リクエストの大きさの上限（64MB の動画は base64 で約 86MB） |
 | `ffmpeg` / `ffprobe` | `ffmpeg` / `ffprobe` | 後処理に使うコマンド。`PATH` から探す |
 
 ワークフローごとの設定：
@@ -194,6 +219,8 @@ vpipe-api serve
 
 - 重い処理は 1 つずつ。Metal のメモリは固定で確保されるので、生成中に大きな GPU アプリ（書き出し、ローカル LLM など）を動かすと、両方が遅くなるかメモリが尽きる
 - いちばん重いのは `final` × 243 フレーム。32GB の M5 では、空きメモリが最小 18% まで減り、スワップは 9.7GB から 14.8GB に増えた（生成は問題なく完了）。16GB の Mac では、長い `final` に頼る前に短い `final` で試すこと
+- 1920×1152 の `flashvsr-upscale` も同じくらい重い。3 グループの処理で、空きメモリが最小 16% まで減り、スワップは 7.5GB から 17GB に増えた
+- 超解像は、可逆の中間ファイル用にディスクも使う。1920×1152 で 1 コマ約 4.5MB（24fps・10 秒で約 1.1GB、60fps・40 秒で約 11GB）。ジョブが終われば消える
 - 長いバッチは電源につないで回す。バッテリーだと性能が落ち、すぐに減る
 - ファンの無い Mac は、長いクリップで熱のため遅くなる。上の表より時間がかかる前提で
 

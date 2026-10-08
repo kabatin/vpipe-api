@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Header
@@ -32,6 +33,7 @@ from vpipe_api.api.security import (
     BodySizeLimitMiddleware,
     BusyGateMiddleware,
     LoopbackOnlyMiddleware,
+    ModelGateMiddleware,
 )
 from vpipe_api.jobs.queue import (
     IdempotencyConflictError,
@@ -68,6 +70,7 @@ def _submit_endpoint(queue: JobQueue, workflow: Workflow) -> Callable[..., Any]:
                 workflow=record.workflow,
                 status=record.status,
                 created_at=record.created_at,
+                estimate_seconds=record.estimate_seconds,
             ).model_dump(mode="json"),
         )
 
@@ -178,6 +181,7 @@ def create_app(
     *,
     token: str | None,
     max_body_bytes: int,
+    work_dir: Path | None = None,
     manage_queue: bool = True,
 ) -> FastAPI:
     @asynccontextmanager
@@ -198,9 +202,11 @@ def create_app(
     )
     install_error_handlers(app)
     app.include_router(build_router(queue, registry))
-    # Starlette runs the last-added middleware first:
-    # auth (or loopback-only without a token), size check, busy gate, route.
+    # Starlette runs the last-added middleware first: auth (or loopback-only without a
+    # token), size check, model gate (when work_dir is known), busy gate, route.
     app.add_middleware(BusyGateMiddleware, queue=queue)
+    if work_dir is not None:
+        app.add_middleware(ModelGateMiddleware, registry=registry, work_dir=work_dir)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes)
     if token is not None:
         app.add_middleware(BearerAuthMiddleware, token=token)

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import install_models
 from tests.fakes import EchoWorkflow, FakeRunner
 from vpipe_api.api.app import create_app
 from vpipe_api.jobs.queue import JobQueue
@@ -75,8 +76,11 @@ def test_full_job_flow(client: TestClient) -> None:
     assert accepted.status_code == 202
     job = accepted.json()
     assert (job["workflow"], job["status"]) == ("echo", "queued")
+    assert job["estimate_seconds"] > 0  # known from the submit on
     done = poll(client, job["id"], "succeeded")
     assert done["result"] == {"length": 2} and done["error"] is None
+    assert {"queue_seconds", "backend_seconds", "total_seconds"} <= done["timings"].keys()
+    assert done["estimate_seconds"] == job["estimate_seconds"]
     out = client.get(f"/v1/jobs/{job['id']}/output")
     assert out.status_code == 200 and out.text == "HI"
     assert out.headers["content-type"].startswith("text/plain")
@@ -146,3 +150,42 @@ def test_body_limits(tmp_path: Path, runner: FakeRunner) -> None:
             headers={"Content-Type": "application/json"},
         )
         assert chunked.status_code == 411
+
+
+def test_missing_models_refuse_the_submit_before_the_body(
+    tmp_path: Path, runner: FakeRunner
+) -> None:
+    registry = WorkflowRegistry([EchoWorkflow(), H3VideoWorkflow(MediaTools())])
+    queue = JobQueue(
+        JobStore(tmp_path), registry, runner, max_waiting=1, timeout_factor=2, retention_days=7
+    )
+    work_dir = tmp_path / "work"
+    app = create_app(queue, registry, token=None, max_body_bytes=1 << 20, work_dir=work_dir)
+    path = "/v1/workflows/minimax-h3-turbo-video/jobs"
+    junk = {"content": b"not json", "headers": {"Content-Type": "application/json"}}
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        refused = c.post(path, **junk)
+        assert refused.status_code == 409
+        error = refused.json()["error"]
+        assert (error["code"], error["retryable"]) == ("model_not_installed", False)
+        assert "not downloaded" in error["message"]
+        assert "vpipe-api setup models minimax-h3-turbo-video" in error["message"]
+        assert str(tmp_path) not in error["message"]
+        assert c.post("/v1/workflows/echo/jobs", json={"text": "hi"}).status_code == 202
+        listed = [w["id"] for w in c.get("/v1/workflows").json()["workflows"]]
+        assert "minimax-h3-turbo-video" in listed  # still advertised
+        install_models(work_dir)
+        assert c.post(path, **junk).status_code == 422  # past the gate, the body is read
+
+
+def test_auth_is_checked_before_the_model_gate(tmp_path: Path, runner: FakeRunner) -> None:
+    registry = WorkflowRegistry([H3VideoWorkflow(MediaTools())])
+    queue = JobQueue(
+        JobStore(tmp_path), registry, runner, max_waiting=1, timeout_factor=2, retention_days=7
+    )
+    app = create_app(
+        queue, registry, token=TOKEN, max_body_bytes=1 << 20, work_dir=tmp_path / "work"
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        refused = c.post("/v1/workflows/minimax-h3-turbo-video/jobs", json={})
+        assert refused.status_code == 401  # install state is not shown to strangers

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vpipe_api.jobs.models import JobError, JobStatus
 from vpipe_api.jobs.queue import JobView
@@ -30,11 +30,18 @@ class WorkflowsResponse(BaseModel):
     workflows: list[WorkflowInfo]
 
 
+_ESTIMATE = Field(
+    default=None,
+    description="seconds the run is expected to take once it starts (the workflow's estimate)",
+)
+
+
 class JobAccepted(BaseModel):
     id: str
     workflow: str
     status: JobStatus
     created_at: datetime
+    estimate_seconds: float | None = _ESTIMATE
 
 
 class JobResponse(BaseModel):
@@ -48,6 +55,11 @@ class JobResponse(BaseModel):
     finished_at: datetime | None
     result: dict[str, Any] | None
     error: JobError | None
+    estimate_seconds: float | None = _ESTIMATE
+    timings: dict[str, float] = Field(
+        description="wall-clock seconds measured by the server: queue_seconds (once started), "
+        "backend_seconds, postprocess_seconds, total_seconds (once finished)"
+    )
 
     @classmethod
     def from_view(cls, view: JobView) -> JobResponse:
@@ -63,4 +75,6 @@ class JobResponse(BaseModel):
             finished_at=record.finished_at,
             result=record.result,
             error=record.error,
+            estimate_seconds=record.estimate_seconds,
+            timings=record.timings,
         )

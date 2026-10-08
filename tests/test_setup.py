@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import install_models
+from tests.fakes import EchoWorkflow
 from vpipe_api.runner import RunResult
 from vpipe_api.settings import Settings, load_settings
 from vpipe_api.setup.models import ModelPreparer, dir_size, fetch_only
 from vpipe_api.setup.vpipe_build import KNOWN_COMMITS, SetupError, binary_path, build_vpipe
-from vpipe_api.workflows.base import MediaTools
+from vpipe_api.workflows.base import MediaTools, RequiredModel
 from vpipe_api.workflows.h3_video import H3VideoWorkflow
 
 # -- build ---------------------------------------------------------------------------
@@ -188,8 +189,43 @@ def test_prepare_needs_pipelines_and_known_models(tmp_path: Path, settings: Sett
         ModelPreparer(s, runner=runner).prepare(H3VideoWorkflow(MediaTools()))  # type: ignore[arg-type]
     install_models(settings.work_dir)  # the default LoRA is then present
     custom = H3VideoWorkflow(MediaTools(), {"model_key": "local/Custom"})
-    with pytest.raises(SetupError, match="no prepare pipeline"):
+    with pytest.raises(SetupError, match="cannot be fetched"):
         ModelPreparer(s, runner=runner).prepare(custom)  # type: ignore[arg-type]
+
+
+class _HubOnly(EchoWorkflow):
+    """A model vpipe has no prepare pipeline for: fetched from the Hub as published."""
+
+    @property
+    def required_models(self) -> tuple[RequiredModel, ...]:
+        return (RequiredModel(key="org/repo", path="org/repo", files=("w.bin",), hf_fetch=True),)
+
+
+def test_prepare_fetches_a_hub_model_without_a_prepare_pipeline(
+    src_settings: Settings, work_dir: Path
+) -> None:
+    specs: list[dict] = []
+
+    class Fetcher:
+        def run(self, spec, run_dir, *, expected_outputs, timeout_s, cancel, on_progress=None):
+            specs.append(spec)
+            (work_dir / "models" / "org" / "repo").mkdir(parents=True, exist_ok=True)
+            (work_dir / "models" / "org" / "repo" / "w.bin").write_bytes(b"x")
+            return RunResult(returncode=0, duration_s=1, log_path=run_dir / "vpipe.log")
+
+    prepared = ModelPreparer(src_settings, runner=Fetcher()).prepare(_HubOnly())  # type: ignore[arg-type]
+    assert prepared == ["org/repo"]
+    assert len(specs) == 1  # fetch only: nothing to quantize or convert
+    (stage,) = specs[0]["stages"]
+    assert stage["type"] == "model-fetch"
+    assert stage["config"] == {
+        "model_path": "org/repo",
+        "hf_token": "",
+        "base_path": "./models",
+        "skip_existing_files": True,
+        "overwrite_existing": False,
+        "xet_streams": 1,
+    }
 
 
 def test_disk_space_guard(

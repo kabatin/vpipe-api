@@ -40,6 +40,26 @@ def dir_size(root: Path) -> int:
     return total
 
 
+def hub_fetch(repo: str) -> dict[str, Any]:
+    """vpipe's model-fetch for a model used as published. It also registers the model,
+    which model-select needs: an unregistered ``hf_dir`` is read as a plain path."""
+    config = {
+        "model_path": repo,
+        "hf_token": "",
+        "base_path": "./models",
+        "skip_existing_files": True,
+        "overwrite_existing": False,
+        # one stream: the default eight stalled at 0 % on every try (FlashVSR, 2026-10-08)
+        "xet_streams": 1,
+    }
+    stage = {"id": "fetch", "type": "model-fetch", "iports": [], "config": config}
+    return {"id": f"fetch-{_slug(repo)}", "stages": [stage], "subpipelines": []}
+
+
+def _slug(name: str) -> str:
+    return name.replace("/", "-")
+
+
 def fetch_only(spec: dict[str, Any]) -> dict[str, Any]:
     stages = [
         {key: value for key, value in stage.items() if key != "iports"}
@@ -85,8 +105,8 @@ class ModelPreparer:
         return prepared
 
     def _prepare_model(self, model: RequiredModel) -> None:
-        if not model.prepare_pipelines:
-            raise SetupError(f"{model.key} has no prepare pipeline; prepare it by hand")
+        if not model.can_setup:
+            raise SetupError(f"{model.key} cannot be fetched by setup; prepare it by hand")
         self._models_dir.mkdir(parents=True, exist_ok=True)
         free_gb = shutil.disk_usage(self._models_dir).free / 1e9
         if free_gb < model.disk_gb_needed:
@@ -94,6 +114,9 @@ class ModelPreparer:
                 f"{model.key} needs ~{model.disk_gb_needed} GB free while preparing; "
                 f"only {free_gb:.0f} GB free at {self._models_dir}"
             )
+        if model.hf_fetch:
+            self._emit(f"{model.key}: downloading")
+            self._fetch_with_watchdog(_slug(model.key), hub_fetch(model.path))
         for name in model.prepare_pipelines:
             path = self._pipelines / f"{name}.vpipeline"
             if not path.is_file():
@@ -112,9 +135,8 @@ class ModelPreparer:
             if not result.ok:
                 raise SetupError(f"{name} failed: {result.describe_failure()} ({result.log_path})")
         if not model.is_present(self._work_dir):
-            raise SetupError(
-                f"{model.key} still missing after {', '.join(model.prepare_pipelines)}"
-            )
+            steps = ", ".join(model.prepare_pipelines) or "the download"
+            raise SetupError(f"{model.key} still missing after {steps}")
 
     def _fetch_with_watchdog(self, name: str, spec: dict[str, Any]) -> None:
         for attempt in range(self._max_restarts + 1):

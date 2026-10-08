@@ -12,11 +12,10 @@ from vpipe_api.jobs.queue import (
     JobNotFoundError,
     JobQueue,
     QueueFullError,
-    _phase_progress,
     redact,
 )
 from vpipe_api.jobs.store import JobStore
-from vpipe_api.workflows.base import InvalidParamsError, WorkflowRegistry
+from vpipe_api.workflows.base import InvalidParamsError, WorkflowRegistry, phase_progress
 
 
 def wait_for(predicate, timeout: float = 5.0) -> None:
@@ -59,6 +58,16 @@ def test_job_runs_to_success(queue: JobQueue) -> None:
     view = queue.view(record.id)
     assert view.progress == 1.0 and view.record.result == {"length": 5}
     assert queue.output_path(record.id).read_text() == "HELLO"
+    timings = view.record.timings
+    assert timings.keys() == {
+        "queue_seconds",
+        "backend_seconds",
+        "postprocess_seconds",
+        "total_seconds",
+    }
+    assert timings["backend_seconds"] == 1  # the runner's own measurement
+    assert record.estimate_seconds == EchoWorkflow().estimate_seconds({"text": "hello"})
+    assert timings["total_seconds"] >= timings["queue_seconds"] + timings["postprocess_seconds"]
 
 
 @pytest.mark.parametrize(
@@ -70,6 +79,10 @@ def test_failures_are_recorded(queue: JobQueue, runner: FakeRunner, mode: str, c
     wait_for(lambda: status(queue, record.id) is JobStatus.FAILED)
     error = queue.view(record.id).record.error
     assert error is not None and error.code == code and error.retryable
+    timings = queue.view(record.id).record.timings
+    assert "total_seconds" in timings
+    if mode != "crash":  # a crash inside the runner leaves no run time to report
+        assert "backend_seconds" in timings
 
 
 def test_workflow_failure_keeps_its_code(queue: JobQueue) -> None:
@@ -79,6 +92,72 @@ def test_workflow_failure_keeps_its_code(queue: JobQueue) -> None:
     assert error is not None and (error.code, error.retryable) == ("postprocess_failed", False)
     with pytest.raises(JobConflictError):
         queue.output_path(record.id)
+
+
+class _OtherEcho(EchoWorkflow):
+    id = "other-echo"  # e.g. an upscale next to a generation
+
+
+def test_different_workflows_share_the_one_gpu_slot(tmp_path: Path, runner: FakeRunner) -> None:
+    gen, upscale = EchoWorkflow(), _OtherEcho()
+    q = JobQueue(
+        JobStore(tmp_path),
+        WorkflowRegistry([gen, upscale]),
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+    )
+    q.start()
+    try:
+        runner.block = True
+        q.submit(gen, EchoParams(text="a"))
+        runner.started.wait(2)
+        second, _ = q.submit(upscale, EchoParams(text="b"))
+        assert q.counts() == (1, 1)  # never two runs at once, whatever the workflow
+        assert q.view(second.id).record.status is JobStatus.QUEUED
+        with pytest.raises(QueueFullError):
+            q.submit(gen, EchoParams(text="c"))
+        runner.release.set()
+        wait_for(lambda: q.view(second.id).record.status is JobStatus.SUCCEEDED)
+        assert runner.calls == 2
+    finally:
+        runner.release.set()
+        q.stop(timeout_s=5)
+
+
+class _BadEstimate(EchoWorkflow):
+    id = "bad-estimate"
+
+    def estimate_seconds(self, params):  # type: ignore[override]
+        if params.get("text") == "boom":
+            raise ValueError("a bug in the estimate")
+        return 10.0
+
+
+def test_a_workflow_bug_before_the_run_fails_the_job_not_the_worker(
+    tmp_path: Path, runner: FakeRunner
+) -> None:
+    wf = _BadEstimate()
+    q = JobQueue(
+        JobStore(tmp_path),
+        WorkflowRegistry([wf]),
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+    )
+    q.start()
+    try:
+        record = q._store.save(JobRecord(workflow=wf.id, params={"text": "boom"}))
+        q._waiting.append(record.id)
+        with q._cond:
+            q._cond.notify_all()
+        wait_for(lambda: q.view(record.id).record.status is JobStatus.FAILED)
+        after, _ = q.submit(wf, EchoParams(text="fine"))
+        wait_for(lambda: q.view(after.id).record.status is JobStatus.SUCCEEDED)  # still working
+    finally:
+        q.stop(timeout_s=5)
 
 
 def test_capacity_busy_and_positions(queue: JobQueue, runner: FakeRunner) -> None:
@@ -146,10 +225,10 @@ def test_restart_requeues_and_fails_running(tmp_path: Path, runner: FakeRunner) 
 
 
 def test_phase_progress_mapping() -> None:
-    assert _phase_progress("denoise", 0.0) == 0.05
-    assert _phase_progress("denoise", 1.0) == 0.9
-    assert _phase_progress("vae decode", 1.0) == 0.99
-    assert _phase_progress("load", 0.5) is None
+    assert phase_progress("denoise", 0.0) == 0.05
+    assert phase_progress("denoise", 1.0) == 0.9
+    assert phase_progress("vae decode", 1.0) == 0.99
+    assert phase_progress("load", 0.5) is None
 
 
 def test_idempotency_key_returns_the_same_job(queue: JobQueue, runner: FakeRunner) -> None:

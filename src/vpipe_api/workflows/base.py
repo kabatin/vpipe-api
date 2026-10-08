@@ -9,12 +9,24 @@ the persisted record only holds JSON-safe values and can be re-run after a resta
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
+
+# vpipe's progress lines (phase, 0..1) -> the job's progress 0..1, or None to ignore one
+ProgressMapper = Callable[[str, float], "float | None"]
+
+
+def phase_progress(phase: str, fraction: float) -> float | None:
+    """One denoise then one VAE decode, as in an H3 run."""
+    if phase == "denoise":
+        return round(0.05 + 0.85 * fraction, 3)
+    if phase == "vae decode":
+        return round(0.9 + 0.09 * fraction, 3)
+    return None
 
 
 class InvalidParamsError(ValueError):
@@ -44,7 +56,13 @@ class RequiredModel:
     path: str
     files: tuple[str, ...] = ()
     prepare_pipelines: tuple[str, ...] = ()
+    # Used as published: ``setup`` fetches ``path`` from the Hugging Face Hub, nothing more
+    hf_fetch: bool = False
     disk_gb_needed: int = 0
+
+    @property
+    def can_setup(self) -> bool:
+        return bool(self.prepare_pipelines) or self.hf_fetch
 
     def is_present(self, work_dir: Path) -> bool:
         root = work_dir / "models" / self.path
@@ -76,6 +94,9 @@ class Workflow(ABC):
     @abstractmethod
     def required_models(self) -> tuple[RequiredModel, ...]: ...
 
+    def missing_models(self, work_dir: Path) -> tuple[RequiredModel, ...]:
+        return tuple(model for model in self.required_models if not model.is_present(work_dir))
+
     @abstractmethod
     def store_inputs(self, params: BaseModel, job_dir: Path) -> dict[str, Any]:
         """Persist inline inputs; return the JSON-safe params stored on the job record."""
@@ -90,6 +111,10 @@ class Workflow(ABC):
     def finalize(
         self, job_id: str, params: Mapping[str, Any], job_dir: Path, prepared: PreparedRun
     ) -> WorkflowOutput: ...
+
+    def progress_mapper(self, params: Mapping[str, Any]) -> ProgressMapper:
+        """How this job's vpipe progress lines become one 0..1 figure."""
+        return phase_progress
 
     @abstractmethod
     def smoke_params(self) -> dict[str, Any]:

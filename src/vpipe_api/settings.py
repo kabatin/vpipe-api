@@ -59,7 +59,7 @@ class Settings(BaseModel):
     max_waiting: int = Field(default=1, ge=0, le=100)
     retention_days: int = Field(default=7, ge=1, le=365)
     job_timeout_factor: float = Field(default=3.0, ge=1.0, le=20.0)
-    max_body_mb: int = Field(default=64, ge=1, le=1024)
+    max_body_mb: int = Field(default=96, ge=1, le=1024)  # a 64 MB video is ~86 MB as base64
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     workflows: dict[str, dict[str, Any]] = Field(default_factory=dict)

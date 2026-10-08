@@ -1,9 +1,10 @@
-"""Request guards applied before routing: bearer token, body size, and the busy gate."""
+"""Request guards applied before routing: bearer token, body size, model and busy gates."""
 
 from __future__ import annotations
 
 import hmac
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -15,6 +16,7 @@ from vpipe_api.api.errors import busy_response, error_response
 
 if TYPE_CHECKING:
     from vpipe_api.jobs.queue import JobQueue
+    from vpipe_api.workflows.base import WorkflowRegistry
 
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9._:-]{1,128}$"
@@ -46,6 +48,35 @@ class LoopbackOnlyMiddleware(BaseHTTPMiddleware):
             return error_response(
                 403, "proxy_requires_token", "serving through a proxy requires VPIPE_API_TOKEN"
             )
+        return await call_next(request)
+
+
+class ModelGateMiddleware(BaseHTTPMiddleware):
+    """Refuse a submit whose workflow's models are not on disk, before its body is read.
+
+    A job would only fail later, or make vpipe look for weights that are not there; a client
+    that polls for hours could not tell that from a slow run. The workflow stays listed.
+    """
+
+    def __init__(self, app: ASGIApp, registry: WorkflowRegistry, work_dir: Path) -> None:
+        super().__init__(app)
+        self._registry = registry
+        self._work_dir = work_dir
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        match = _SUBMIT_PATH.match(request.url.path)
+        workflow = self._registry.get(match.group(1)) if match is not None else None
+        if request.method == "POST" and workflow is not None:
+            missing = workflow.missing_models(self._work_dir)
+            if missing:
+                names = ", ".join(model.key for model in missing)
+                return error_response(
+                    409,
+                    "model_not_installed",
+                    f"model not downloaded on this server: {names} "
+                    f"(run `vpipe-api setup models {workflow.id}` there)",
+                    retryable=False,
+                )
         return await call_next(request)
 
 

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Workflow `flashvsr-upscale`: FlashVSR v1.1 super-resolution of an uploaded MP4 (≤ 64 MB, ≤ 40 s) to an
+  exact size, keeping the source's frame count, frame rate and audio. It shares the GPU slot and the
+  waiting queue with every other workflow. Model: `vpipe-api setup models flashvsr-upscale` (≈ 6.8 GB).
+- `estimate_seconds` on every job (and in the submit's `202` body): the workflow's estimate of the run, as
+  in wan-api, so clients need no formula of their own.
+- `timings` on every job (`queue_seconds`, `backend_seconds`, `postprocess_seconds`, `total_seconds`),
+  measured by the server, same keys as wan-api.
+- A submit to a workflow whose model is not downloaded is refused before its body is read:
+  `409 model_not_installed` (not retryable). `doctor` warns instead of failing when another workflow can
+  still run, and `doctor --smoke` skips that workflow.
+- `setup models` can fetch a model vpipe uses as published (no prepare pipeline), with one download
+  stream: vpipe's default eight stalled at 0 % on every try.
+- `max_body_mb` defaults to 96 (a 64 MB video is about 86 MB as base64).
 - Outputs are exactly 24 fps again. Since 0.1.1 the frame rate was guessed from the Matroska intermediate's
   millisecond timestamps; with large frames (`final`) the file came out at a guessed rate (23.976 on our server)
   with the right frame count, while the job result still said `fps: 24`.

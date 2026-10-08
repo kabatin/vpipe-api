@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from vpipe_api.settings import Settings
 from vpipe_api.workflows.base import MediaTools, Workflow, WorkflowRegistry
+from vpipe_api.workflows.flashvsr import FlashVsrWorkflow
 from vpipe_api.workflows.h3_video import H3VideoWorkflow
 
 
@@ -11,6 +12,7 @@ def build_registry(settings: Settings) -> WorkflowRegistry:
     media = MediaTools(ffmpeg=settings.ffmpeg, ffprobe=settings.ffprobe)
     workflows: list[Workflow] = [
         H3VideoWorkflow(media, settings.workflow_options(H3VideoWorkflow.id)),
+        FlashVsrWorkflow(media, settings.workflow_options(FlashVsrWorkflow.id)),
     ]
     return WorkflowRegistry(workflows)
 

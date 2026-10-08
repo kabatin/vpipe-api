@@ -18,10 +18,10 @@ GET  /v1/jobs/{id}                               → queued → running (progres
 GET  /v1/jobs/{id}/output                        → video/mp4
 ```
 
-- **Workflow registry.** Clients call named, validated recipes (`minimax-h3-turbo-video`), never raw pipeline JSON,
-  so a LAN-exposed server cannot be told to read or write arbitrary files.
-- **One GPU slot, honest backpressure.** Jobs run one at a time. When the running slot and the small waiting queue
-  are full, `POST` answers `429 busy` with `Retry-After` instead of silently piling up hours of work.
+- **Workflow registry.** Clients call named, validated recipes (`minimax-h3-turbo-video`, `flashvsr-upscale`), never
+  raw pipeline JSON, so a LAN-exposed server cannot be told to read or write arbitrary files.
+- **One GPU slot, honest backpressure.** Jobs run one at a time, whatever the workflow — an upscale never runs
+  beside a generation. When the running slot and the small waiting queue are full, `POST` answers `429 busy` with `Retry-After` instead of silently piling up hours of work.
 - **Real failure detection.** vpipe exits `0` even when a stage fails at runtime; vpipe-api reads the log and checks
   that the output was actually written before calling a job successful.
 - **Restart-safe.** Jobs are persisted on disk; queued jobs resume after a restart, interrupted ones are reported as
@@ -55,9 +55,34 @@ Measured on an M5 MacBook Pro (10-core GPU, 32 GB), 6 steps:
 > commercial use. Check the license of every model you download before using its output. vpipe-api itself is
 > Apache-2.0 and redistributes no weights.
 
+## Workflow: `flashvsr-upscale`
+
+[FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) (Apache-2.0) super-resolution of a clip you
+upload — typically a take from the workflow above. It comes back at exactly the size you ask for with the
+source's own frame count, frame rate and audio, so the upscaled take drops into the same place on a timeline.
+
+| | |
+|---|---|
+| Input | `source_video`: base64 MP4, 8-bit SDR H.264/HEVC video (+ AAC audio), ≤ 64 MB, ≤ 40 s, ≤ 60 fps |
+| Output | `output` size (default: the source's shape, long side 1920); H.264 MP4 (limited-range BT.709); same frames, fps and audio as the source |
+| Processing | centre-crop to the output's shape, FlashVSR on its 128-pixel grid (1920×1080 → 1920×1152, at most that many pixels), resize to the output |
+
+```sh
+base64 -i take.mp4 > take.b64        # Linux: base64 -w0 take.mp4 > take.b64
+jq -n --rawfile v take.b64 '{source_video: {data: ($v | rtrimstr("\n")), media_type: "video/mp4"},
+                             output: {width: 1920, height: 1080}}' > body.json
+curl -s -X POST "$API/v1/workflows/flashvsr-upscale/jobs" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: take-123-upscale' --data-binary @body.json      # then poll and fetch as in First job
+```
+
+Time grows in steps of 21 source frames (one FlashVSR group): about 104 s per group at 1920×1152 on the M5
+above (42 frames ≈ 3.5 min, 56 frames ≈ 5.2 min). It is as heavy on memory as `final`. Request and details:
+[docs/api.md](docs/api.md#workflow-flashvsr-upscale).
+
 ## Requirements
 
-- Apple Silicon Mac, macOS 26+ (vpipe's generative stack), ~65 GB disk for H3 (185 GB peak while preparing)
+- Apple Silicon Mac, macOS 26+ (vpipe's generative stack), ~65 GB disk for H3 (185 GB peak while preparing),
+  ~6.8 GB more for FlashVSR
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/), `ffmpeg`/`ffprobe`, Xcode (for building vpipe), `cmake`;
   `jq` for the curl examples
 - 16 GB RAM works; more RAM mostly means less weight streaming (`final` needs the most, see
@@ -86,6 +111,7 @@ work_dir  = "/Users/you/vpipe/work"              # model registry + models live 
 
 ```sh
 vpipe-api setup models minimax-h3-turbo-video     # ~118 GB download, then 8-bit quantize
+vpipe-api setup models flashvsr-upscale           # optional: ~6.8 GB, used as published
 ```
 
 Downloads resume where they stopped. If the model directory stops growing for 10 minutes (e.g. after switching
@@ -135,7 +161,7 @@ restart ends as a retryable `server_restarted` failure (queued jobs carry on).
 | `retention_days` | `7` | finished jobs and outputs are deleted after this |
 | `data_dir` | `~/.local/share/vpipe-api` | job records and outputs |
 | `job_timeout_factor` | `3.0` | a job is stopped after `estimate × factor + 5 min` |
-| `max_body_mb` | `64` | request size limit |
+| `max_body_mb` | `96` | request size limit (a 64 MB video is ~86 MB as base64) |
 | `ffmpeg` / `ffprobe` | `ffmpeg` / `ffprobe` | binaries for post-processing, looked up on `PATH` |
 
 Workflow options:
@@ -186,6 +212,10 @@ Keep workflows closed: clients choose parameters, never file paths or stage grap
   generation slows both down or exhausts memory.
 - `final` × 243 frames is the heaviest job: on the 32 GB M5 free memory bottomed out at 18 % and swap grew from
   9.7 GB to 14.8 GB (it finished fine). On a 16 GB Mac, try a short `final` clip before relying on long ones.
+- `flashvsr-upscale` at 1920×1152 is in the same class: free memory went down to 16 % and swap grew from 7.5 GB to
+  17 GB in a 3-group run.
+- An upscale also needs disk for lossless intermediates, about 4.5 MB a frame at 1920×1152 (a 10 s take at 24 fps
+  ≈ 1.1 GB, a 40 s clip at 60 fps ≈ 11 GB). They are deleted when the job ends.
 - Use AC power for long batches — on battery a Mac throttles and drains quickly.
 - Fanless Macs throttle on long clips; expect longer times than the table above.
 

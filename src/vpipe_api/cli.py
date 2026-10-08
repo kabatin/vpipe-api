@@ -60,7 +60,13 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
         retention_days=settings.retention_days,
     )
     token = settings.token.get_secret_value() if settings.token else None
-    app = create_app(queue, registry, token=token, max_body_bytes=settings.max_body_mb << 20)
+    app = create_app(
+        queue,
+        registry,
+        token=token,
+        max_body_bytes=settings.max_body_mb << 20,
+        work_dir=work_dir,
+    )
     _out(
         f"vpipe-api {__version__} on http://{settings.host}:{settings.port} "
         f"(auth: {'bearer' if token else 'none'}, workflows: "

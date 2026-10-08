@@ -78,25 +78,27 @@ def check_work_dir(settings: Settings) -> Check:
 
 
 def check_models(settings: Settings, workflows: Iterable[Workflow]) -> list[Check]:
+    """A missing model fails only when no workflow can run; otherwise that workflow is
+    refused at submit and the rest work, so it is a warning (e.g. H3 without FlashVSR)."""
     if settings.work_dir is None:
         return []
+    work_dir = settings.work_dir
+    workflows = list(workflows)
+    any_ready = any(not workflow.missing_models(work_dir) for workflow in workflows)
+    missing_level = Level.WARN if any_ready else Level.FAIL
     checks = []
     for workflow in workflows:
         for model in workflow.required_models:
-            present = model.is_present(settings.work_dir)
+            present = model.is_present(work_dir)
             hint = (
                 ""
                 if present
-                else (
-                    f" — run `vpipe-api setup models {workflow.id}`"
-                    if model.prepare_pipelines
-                    else ""
-                )
+                else (f" — run `vpipe-api setup models {workflow.id}`" if model.can_setup else "")
             )
             checks.append(
                 Check(
                     f"model {model.key}",
-                    Level.OK if present else Level.FAIL,
+                    Level.OK if present else missing_level,
                     f"{'present' if present else 'missing'} ({workflow.id}){hint}",
                 )
             )
@@ -145,13 +147,17 @@ def check_memory() -> Check:
 def run_smoke(settings: Settings, workflow: Workflow) -> Check:
     """Run the workflow's cheapest job end-to-end, bypassing the HTTP server."""
     vpipe_bin, work_dir = settings.require_runtime()
-    params = workflow.params_model.model_validate(workflow.smoke_params())
+    name = f"smoke {workflow.id}"
     smoke_root = settings.data_dir / "smoke"
     smoke_root.mkdir(parents=True, exist_ok=True)
     job_dir = Path(tempfile.mkdtemp(prefix=f"{workflow.id}-", dir=smoke_root))
-    name = f"smoke {workflow.id}"
-    stored = workflow.store_inputs(params, job_dir)
-    prepared = workflow.prepare("smoke", stored, job_dir)
+    try:
+        params = workflow.params_model.model_validate(workflow.smoke_params())
+        stored = workflow.store_inputs(params, job_dir)
+        prepared = workflow.prepare("smoke", stored, job_dir)
+    except Exception as exc:  # report it like any other failed check, keep going
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return Check(name, Level.FAIL, f"could not set up the job: {exc}")
     result = VpipeRunner(vpipe_bin, work_dir).run(
         prepared.spec,
         job_dir,
@@ -200,7 +206,11 @@ def run_doctor(
             emit(check)
     if smoke and not any(check.level is Level.FAIL for check in checks):
         for workflow in registry:
-            check = run_smoke(settings, workflow)
+            check = (
+                Check(f"smoke {workflow.id}", Level.WARN, "skipped (model missing)")
+                if settings.work_dir is not None and workflow.missing_models(settings.work_dir)
+                else run_smoke(settings, workflow)
+            )
             checks.append(check)
             if emit is not None:
                 emit(check)
