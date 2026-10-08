@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vpipe-api"
-version = "0.1.1"
+version = "0.1.2"
 description = "Expose vpipe (on-device generative pipelines for Apple Silicon) as an HTTP job API"
 readme = "README.md"
 license = "Apache-2.0"

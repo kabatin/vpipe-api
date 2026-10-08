@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 — 2026-10-09
 
 - Workflow `flashvsr-upscale`: FlashVSR v1.1 super-resolution of an uploaded MP4 (≤ 64 MB, ≤ 40 s) to an
   exact size, keeping the source's frame count, frame rate and audio. It shares the GPU slot and the

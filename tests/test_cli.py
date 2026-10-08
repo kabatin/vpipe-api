@@ -20,7 +20,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_vpipe: Path, work_
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main(["--version"])
-    assert "vpipe-api 0.1.1" in capsys.readouterr().out
+    assert "vpipe-api 0.1.2" in capsys.readouterr().out
 
 
 def test_workflows_and_config(env: Path, capsys: pytest.CaptureFixture[str]) -> None:
