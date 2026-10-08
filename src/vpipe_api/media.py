@@ -119,6 +119,7 @@ def finalize_video(
     *,
     width: int,
     height: int,
+    fps: int | Fraction,
     comment: str,
     ffmpeg: str = "ffmpeg",
 ) -> None:
@@ -127,7 +128,8 @@ def finalize_video(
     Always re-encodes, even at the same size: the source is vpipe's lossless intermediate
     (FFV1, full-range BT.709 -- see ``h3_graph``), which players cannot open. That colour
     is stated to the scaler rather than read from the tags, which a remux can drop; the
-    output is limited-range BT.709 H.264 and tagged as such.
+    output is limited-range BT.709 H.264 and tagged as such. Likewise the frame rate is
+    ``fps``, whatever the source's timestamps say.
 
     The ``comment`` metadata makes every output byte-unique, so a consumer that
     de-duplicates by checksum never mistakes a new clip for an old one.
@@ -141,9 +143,11 @@ def finalize_video(
         f"crop={width}:{height},setsar=1,format=yuv420p,"
         "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
     )
-    # passthrough: one frame out per frame in (CFR mode in ffmpeg 6 pads Matroska's
-    # millisecond timestamps with a duplicate frame)
-    cmd = [ffmpeg, "-y", "-v", "error", "-i", str(src), "-an", "-vf", vf]
+    # -r before -i: frame n is at n/fps. vpipe's Matroska has millisecond timestamps and no
+    # frame rate, and with large FFV1 frames ffmpeg guesses one from a couple of them
+    # (e.g. 24000/1001 at 1344x768). passthrough: one frame out per frame in, never a
+    # dropped or duplicated one
+    cmd = [ffmpeg, "-y", "-v", "error", "-r", str(fps), "-i", str(src), "-an", "-vf", vf]
     cmd += ["-fps_mode", "passthrough"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p"]
     cmd += ["-metadata", f"comment={comment}", "-movflags", "+faststart", str(tmp)]

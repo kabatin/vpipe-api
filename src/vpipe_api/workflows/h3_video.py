@@ -270,6 +270,7 @@ class H3VideoWorkflow(Workflow):
                 final,
                 width=out["width"],
                 height=out["height"],
+                fps=FPS,
                 comment=f"vpipe-job:{job_id}",
                 ffmpeg=self.media.ffmpeg,
             )

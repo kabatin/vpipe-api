@@ -72,6 +72,7 @@ def test_first_frame_job_over_http(
 
     info = probe_video(out)
     assert (info.width, info.height, info.frames, info.has_audio) == (1280, 720, 56, False)
+    assert info.fps == 24.0  # the file itself, not just the result JSON
     spec = json.loads(calls.read_text().splitlines()[0])
     prompt = next(s for s in spec["stages"] if s["id"] == "text-prompt")["config"]["text"]
     assert prompt == "波と🌊カモメ"  # UTF-8 kept intact for vpipe's parser

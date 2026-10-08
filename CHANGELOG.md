@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Outputs are exactly 24 fps again. Since 0.1.1 the frame rate was guessed from the Matroska intermediate's
+  millisecond timestamps; with large frames (`final`) the file came out at a guessed rate (23.976 on our server)
+  with the right frame count, while the job result still said `fps: 24`.
+
 ## 0.1.1 — 2026-10-07
 
 - `quality: "final"`: H3's training resolution (short side 768; 1344×768 for 16:9), about 3× the time of `draft`.

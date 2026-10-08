@@ -114,7 +114,12 @@ def test_probe_video(tmp_path: Path) -> None:
 
 
 def _lossless_clip(
-    path: Path, source: str = "testsrc=size=320x192", *, audio: bool = False, tagged: bool = True
+    path: Path,
+    source: str = "testsrc=size=320x192",
+    *,
+    audio: bool = False,
+    tagged: bool = True,
+    rate: int = 24,
 ) -> Path:
     """A clip shaped like vpipe's intermediate: FFV1, 4:4:4, full-range BT.709 samples.
 
@@ -126,7 +131,7 @@ def _lossless_clip(
     vf = f"scale=out_range=pc:out_color_matrix=bt709,format=yuv444p,setparams={tags[0]}"
     # -color_range pc, or format negotiation converts tagged full-range samples to tv
     codec = ["-c:v", "ffv1", "-pix_fmt", "yuv444p", *tags[1:]]
-    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{source}:rate=24"]
+    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{source}:rate={rate}"]
     if audio:
         cmd += ["-f", "lavfi", "-i", "sine=sample_rate=32000", "-shortest", "-c:a", "aac"]
     subprocess.run([*cmd, "-vf", vf, "-frames:v", "24", *codec, str(path)], check=True)
@@ -160,7 +165,7 @@ def test_probe_counts_frames_in_matroska_with_longer_audio(tmp_path: Path) -> No
 def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
     src = _lossless_clip(tmp_path / "raw.mkv", "testsrc=size=832x480", audio=True)
     dst = tmp_path / "out" / "o.mp4"
-    finalize_video(src, dst, width=1280, height=720, comment="vpipe-job:abc")
+    finalize_video(src, dst, width=1280, height=720, fps=24, comment="vpipe-job:abc")
     info = probe_video(dst)
     assert (info.width, info.height, info.frames, info.has_audio) == (1280, 720, 24, False)
     probe = ["ffprobe", "-v", "error", "-show_entries", "format_tags=comment", "-of", "csv=p=0"]
@@ -175,10 +180,26 @@ def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
 
 
 @needs_ffmpeg
+def test_finalize_stamps_the_given_frame_rate(tmp_path: Path) -> None:
+    # vpipe's Matroska has millisecond timestamps and no frame rate; with large FFV1 frames
+    # ffmpeg guesses the rate from a couple of them (24000/1001, 293/12). Here they say 25.
+    src = _lossless_clip(tmp_path / "raw.mkv", rate=25)
+    dst = tmp_path / "o.mp4"
+    finalize_video(src, dst, width=320, height=192, fps=24, comment="x")
+    fields = _stream_fields(dst, "r_frame_rate,avg_frame_rate,nb_frames,duration")
+    assert fields == {
+        "r_frame_rate": "24/1",
+        "avg_frame_rate": "24/1",
+        "nb_frames": "24",
+        "duration": "1.000000",
+    }
+
+
+@needs_ffmpeg
 def test_finalize_reencodes_a_lossless_source_of_the_same_size(tmp_path: Path) -> None:
     src = _lossless_clip(tmp_path / "raw.mkv", "color=gray:s=320x192")
     dst = tmp_path / "o.mp4"
-    finalize_video(src, dst, width=320, height=192, comment="x")
+    finalize_video(src, dst, width=320, height=192, fps=24, comment="x")
     fields = _stream_fields(dst, "codec_name,pix_fmt,width,height")
     assert fields == {"codec_name": "h264", "pix_fmt": "yuv420p", "width": "320", "height": "192"}
 
@@ -201,7 +222,7 @@ def test_finalize_outputs_limited_range_bt709(
     source_luma = _mean_luma(src)
     assert abs(source_luma - full) <= 3  # full-range samples (older ffmpeg rounds a little)
     dst = tmp_path / "o.mp4"
-    finalize_video(src, dst, width=640, height=360, comment="x")
+    finalize_video(src, dst, width=640, height=360, fps=24, comment="x")
     assert _stream_fields(dst, "color_range,color_space,color_primaries,color_transfer") == {
         "color_range": "tv",
         "color_space": "bt709",
