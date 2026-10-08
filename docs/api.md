@@ -41,8 +41,16 @@ Every non-2xx response uses the same shape:
 ### `GET /v1/health`
 
 ```json
-{ "status": "ok", "version": "0.1.1", "running": 1, "waiting": 0, "max_waiting": 1 }
+{ "status": "ok", "version": "0.1.2", "running": 1, "waiting": 0, "max_waiting": 1, "outside_runs": 0 }
 ```
+
+`running` / `waiting` count this server's jobs. `outside_runs` counts `vpipe` command-line runs
+(`--launch`, `--launch-stage`) on the same Mac that the server did not start — an experiment,
+`vpipe-api doctor --smoke` — which share the GPU and memory; `null` if the process list could not be
+read. While it is above 0 the next queued job waits (it stays `queued`) and starts once they end. It
+cannot stop an outside run that begins while a job is already running, and it does not see apps that
+run pipelines inside their own process. A model download (`setup models`' fetch step, `--launch-stage
+model-fetch`) is not counted.
 
 ### `GET /v1/workflows`
 

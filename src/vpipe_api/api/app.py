@@ -109,6 +109,7 @@ def build_router(queue: JobQueue, registry: WorkflowRegistry) -> APIRouter:
             running=running,
             waiting=waiting,
             max_waiting=queue.max_waiting,
+            outside_runs=queue.outside_runs(),
         )
 
     @router.get("/workflows", response_model=WorkflowsResponse)

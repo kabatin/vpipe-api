@@ -160,6 +160,78 @@ def test_a_workflow_bug_before_the_run_fails_the_job_not_the_worker(
         q.stop(timeout_s=5)
 
 
+def test_jobs_wait_while_vpipe_runs_outside_the_server(tmp_path: Path, runner: FakeRunner) -> None:
+    outside = [1]
+    q = JobQueue(
+        JobStore(tmp_path),
+        WorkflowRegistry([EchoWorkflow()]),
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+        outside_runs=lambda: outside[0],
+        outside_poll_s=0.05,
+    )
+    q.start()
+    try:
+        record, _ = q.submit(EchoWorkflow(), EchoParams(text="held"))
+        time.sleep(0.3)
+        assert runner.calls == 0  # never two vpipe runs on the GPU at once
+        assert q.view(record.id).record.status is JobStatus.QUEUED
+        assert q.view(record.id).queue_position == 1
+        assert q.outside_runs() == 1
+        outside[0] = 0  # the experiment ended
+        wait_for(lambda: q.view(record.id).record.status is JobStatus.SUCCEEDED)
+    finally:
+        q.stop(timeout_s=5)
+
+
+def _held_queue(tmp_path: Path, runner: FakeRunner, outside) -> JobQueue:
+    q = JobQueue(
+        JobStore(tmp_path),
+        WorkflowRegistry([EchoWorkflow()]),
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+        outside_runs=outside,
+        outside_poll_s=0.05,
+    )
+    q.start()
+    return q
+
+
+def test_a_held_job_can_be_canceled_and_the_queue_stopped(
+    tmp_path: Path, runner: FakeRunner
+) -> None:
+    q = _held_queue(tmp_path, runner, lambda: 1)
+    record, _ = q.submit(EchoWorkflow(), EchoParams(text="held"))
+    q.cancel(record.id)
+    assert q.view(record.id).record.status is JobStatus.CANCELED
+    started = time.monotonic()
+    q.stop(timeout_s=5)
+    assert time.monotonic() - started < 2 and runner.calls == 0
+
+
+def test_a_failing_outside_check_does_not_stop_the_worker(
+    tmp_path: Path, runner: FakeRunner
+) -> None:
+    calls = []
+
+    def flaky() -> int | None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("ps exploded")
+        return None  # unknown: does not hold jobs
+
+    q = _held_queue(tmp_path, runner, flaky)
+    try:
+        record, _ = q.submit(EchoWorkflow(), EchoParams(text="x"))
+        wait_for(lambda: q.view(record.id).record.status is JobStatus.SUCCEEDED)
+    finally:
+        q.stop(timeout_s=5)
+
+
 def test_capacity_busy_and_positions(queue: JobQueue, runner: FakeRunner) -> None:
     runner.block = True
     first, _ = queue.submit(EchoWorkflow(), EchoParams(text="a"))

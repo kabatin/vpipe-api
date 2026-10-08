@@ -17,6 +17,10 @@ class HealthResponse(BaseModel):
     running: int
     waiting: int
     max_waiting: int
+    outside_runs: int | None = Field(
+        description="vpipe command-line runs on this Mac that the server did not start (an "
+        "experiment, doctor --smoke); queued jobs wait until there are none. null: unknown"
+    )
 
 
 class WorkflowInfo(BaseModel):

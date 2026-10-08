@@ -10,6 +10,7 @@ from pathlib import Path
 
 from vpipe_api import __version__
 from vpipe_api.doctor import Check, Level, run_doctor
+from vpipe_api.outside import outside_runs
 from vpipe_api.settings import Settings, SettingsError, load_settings, resolve_config_path
 from vpipe_api.setup.vpipe_build import DEFAULT_TAG, SetupError, build_vpipe
 from vpipe_api.workflows import build_registry
@@ -58,6 +59,7 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
         max_waiting=settings.max_waiting,
         timeout_factor=settings.job_timeout_factor,
         retention_days=settings.retention_days,
+        outside_runs=outside_runs,
     )
     token = settings.token.get_secret_value() if settings.token else None
     app = create_app(

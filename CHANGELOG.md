@@ -15,6 +15,8 @@
 - `setup models` can fetch a model vpipe uses as published (no prepare pipeline), with one download
   stream: vpipe's default eight stalled at 0 % on every try.
 - `max_body_mb` defaults to 96 (a 64 MB video is about 86 MB as base64).
+- `/v1/health` reports `outside_runs`: `vpipe` command-line runs on the Mac that the server did not start
+  (an experiment, `doctor --smoke`). The next queued job waits while there are any.
 - Outputs are exactly 24 fps again. Since 0.1.1 the frame rate was guessed from the Matroska intermediate's
   millisecond timestamps; with large frames (`final`) the file came out at a guessed rate (23.976 on our server)
   with the right frame count, while the job result still said `fps: 24`.

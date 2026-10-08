@@ -56,6 +56,7 @@ def test_health_and_workflows(client: TestClient) -> None:
         "running": 0,
         "waiting": 0,
         "max_waiting": 1,
+        "outside_runs": 0,
     }
     flows = {w["id"]: w for w in client.get("/v1/workflows").json()["workflows"]}
     assert set(flows) == {"echo", "minimax-h3-turbo-video"}
@@ -189,3 +190,33 @@ def test_auth_is_checked_before_the_model_gate(tmp_path: Path, runner: FakeRunne
     with TestClient(app, base_url="http://127.0.0.1") as c:
         refused = c.post("/v1/workflows/minimax-h3-turbo-video/jobs", json={})
         assert refused.status_code == 401  # install state is not shown to strangers
+
+
+def test_health_reports_vpipe_runs_outside_the_server(tmp_path: Path, runner: FakeRunner) -> None:
+    registry = WorkflowRegistry([EchoWorkflow()])
+    queue = JobQueue(
+        JobStore(tmp_path),
+        registry,
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+        outside_runs=lambda: 1,
+    )
+    app = create_app(queue, registry, token=None, max_body_bytes=1 << 20)
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        health = c.get("/v1/health").json()
+    assert (health["running"], health["outside_runs"]) == (0, 1)
+
+    queue_unknown = JobQueue(
+        JobStore(tmp_path / "u"),
+        registry,
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+        outside_runs=lambda: None,  # ps could not be read
+    )
+    app = create_app(queue_unknown, registry, token=None, max_body_bytes=1 << 20)
+    with TestClient(app, base_url="http://127.0.0.1") as c:
+        assert c.get("/v1/health").json()["outside_runs"] is None

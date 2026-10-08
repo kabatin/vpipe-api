@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +29,7 @@ PRUNE_INTERVAL_S = 3600.0
 RETRY_AFTER_MIN_S = 30
 RETRY_AFTER_MAX_S = 600
 CANCEL_WAIT_S = 45.0
+OUTSIDE_POLL_S = 5.0
 
 
 class Runner(Protocol):
@@ -114,8 +116,13 @@ class JobQueue:
         max_waiting: int,
         timeout_factor: float,
         retention_days: int,
+        outside_runs: Callable[[], int | None] = lambda: 0,
+        outside_poll_s: float = OUTSIDE_POLL_S,
     ) -> None:
         self._store = store
+        # vpipe runs this server did not start (see vpipe_api.outside): jobs wait for them
+        self._outside_runs = outside_runs
+        self._outside_poll_s = outside_poll_s
         self._registry = registry
         self._runner = runner
         self._max_waiting = max_waiting
@@ -161,6 +168,15 @@ class JobQueue:
     @property
     def max_waiting(self) -> int:
         return self._max_waiting
+
+    def outside_runs(self) -> int | None:
+        """vpipe runs going on outside this server (None: unknown); the next job waits while
+        there are any. A failing check counts as unknown and never holds a job."""
+        try:
+            return self._outside_runs()
+        except Exception:
+            log.exception("checking for vpipe runs outside the server failed")
+            return None
 
     def counts(self) -> tuple[int, int]:
         with self._cond:
@@ -306,14 +322,31 @@ class JobQueue:
         return int(min(max(left, RETRY_AFTER_MIN_S), RETRY_AFTER_MAX_S))
 
     def _next(self) -> str | None:
-        with self._cond:
-            while not self._waiting and not self._stopping:
-                self._cond.wait(timeout=PRUNE_INTERVAL_S)
-                if not self._waiting and not self._stopping:
-                    self._store.prune(self._retention_days)
-            if self._stopping:
-                return None
-            return self._waiting.popleft()
+        held = False
+        while True:
+            with self._cond:
+                while not self._waiting and not self._stopping:
+                    self._cond.wait(timeout=PRUNE_INTERVAL_S)
+                    if not self._waiting and not self._stopping:
+                        self._store.prune(self._retention_days)
+                if self._stopping:
+                    return None
+            outside = self.outside_runs()  # runs ps: not under the lock
+            if outside:
+                if not held:
+                    log.info("holding the next job: %d vpipe run(s) outside the server", outside)
+                    held = True
+                with self._cond:
+                    self._cond.wait_for(lambda: self._stopping, timeout=self._outside_poll_s)
+                continue
+            if held:
+                log.info("no vpipe runs outside the server any more: starting the next job")
+                held = False
+            with self._cond:
+                if self._stopping:
+                    return None
+                if self._waiting:  # a cancel may have emptied it meanwhile
+                    return self._waiting.popleft()
 
     def _loop(self) -> None:
         while True:

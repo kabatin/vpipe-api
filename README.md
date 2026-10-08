@@ -208,6 +208,8 @@ Keep workflows closed: clients choose parameters, never file paths or stage grap
 
 ## Operational notes
 
+- Running the `vpipe` command yourself on the same Mac (an experiment, `doctor --smoke`) shows up as
+  `outside_runs` in `/v1/health`, and the next queued job waits until it ends.
 - One heavy job at a time. Metal memory is wired; running other large GPU apps (renderers, local LLMs) during a
   generation slows both down or exhausts memory.
 - `final` × 243 frames is the heaviest job: on the 32 GB M5 free memory bottomed out at 18 % and swap grew from
