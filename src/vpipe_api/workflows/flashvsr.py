@@ -53,11 +53,12 @@ MAX_PIXELS = 1920 * 1152
 MAX_STRETCH = math.log(1152 / 1080) + 1e-9  # what vpipe's own pipeline does to 1920x1080
 DEFAULT_LONG_SIDE = 1920
 MODEL_KEY = "JunhaoZhuang/FlashVSR-v1.1"
-# Measured on an M5 (10-core GPU, 32 GB) at 1920x1152: 2 groups = 210 s, 3 groups = 314 s.
-# Nearly all of it is per group. vpipe reloads the DiT for each one to make room for the VAE
-# decode, which does not shrink with the picture: GROUP_FLOOR_SECONDS is kept at any size and
-# the rest is assumed to scale with the processing pixels (not measured below 1920x1152).
-SECONDS_PER_GROUP = 104
+# Measured on an M5 (10-core GPU, 32 GB) at 1920x1152, whole jobs: 3 groups = 304-312 s,
+# 4 = 413 s, 10 = 1017 s (vpipe alone: 2 groups = 210 s). Nearly all of it is per group:
+# vpipe reloads the DiT for each one to make room for the VAE decode, which does not shrink
+# with the picture, so GROUP_FLOOR_SECONDS is kept at any size and the rest is assumed to
+# scale with the processing pixels (not measured below 1920x1152).
+SECONDS_PER_GROUP = 101
 GROUP_FLOOR_SECONDS = 30
 
 

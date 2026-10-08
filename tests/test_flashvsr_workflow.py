@@ -178,8 +178,10 @@ def test_estimate_grows_with_length_and_size() -> None:
     small = wf.estimate_seconds(_stored(output={"width": 1280, "height": 720}))
     assert small < short < long
     two_groups = wf.estimate_seconds(_stored(source={**_stored()["source"], "frames": 42}))
-    assert 190 < two_groups < 230  # measured 210 s for 2 groups at 1920x1152
-    assert 285 < short < 345  # 56 frames = 3 groups; measured 314 s
+    assert 200 < two_groups < 220  # measured 210 s (vpipe alone) for 2 groups at 1920x1152
+    assert 295 < short < 320  # 56 frames = 3 groups; jobs measured 304-312 s
+    assert 395 < wf.estimate_seconds(_stored(source={**_stored()["source"], "frames": 73})) < 425
+    assert 990 < long < 1045  # 192 frames = 10 groups; measured 1017 s
     # vpipe reloads the model for every group whatever the size: small outputs keep a floor
     tiny = wf.estimate_seconds(
         _stored(source={**_stored()["source"], "frames": 2400}, output={"width": 64, "height": 64})

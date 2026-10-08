@@ -202,8 +202,15 @@ clip). The server clones the last frame up to whole groups plus those 4, runs th
 first frames — exactly the source's: every output frame is generated from a real source frame,
 none is a still copy.
 
-Time is per group of 21 source frames: about 104 s each on an M5 (10-core GPU, 32 GB) at 1920×1152
-(42 frames = 2 groups ≈ 3.5 min, 56 frames = 3 groups ≈ 5.2 min); smaller processing sizes take
-proportionally less. vpipe reloads the model for every group to make room for the VAE decode; free
-memory went down to 16 % and swap grew by about 9.5 GB in a 3-group run, so like `final` this is a
-32 GB-class job — and, like every job, it never runs beside another one.
+Time is per group of 21 source frames, about 101 s each on an M5 (10-core GPU, 32 GB) at 1920×1152 —
+`estimate_seconds` follows it within ~2 %:
+
+| source (24 fps) | groups | time |
+|---|---|---|
+| 56 frames (2.3 s) | 3 | ≈ 5.1 min |
+| 73 frames (3.0 s) | 4 | ≈ 6.9 min |
+| 192 frames (8.0 s) | 10 | ≈ 17 min |
+
+A clip one frame past a group boundary (22 frames) costs a whole extra group. vpipe reloads the model
+for every group to make room for the VAE decode; free memory went down to 13 % and swap peaked at
+18 GB, so like `final` this is a 32 GB-class job — and, like every job, it never runs beside another.

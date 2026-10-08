@@ -75,9 +75,9 @@ curl -s -X POST "$API/v1/workflows/flashvsr-upscale/jobs" -H 'Content-Type: appl
   -H 'Idempotency-Key: take-123-upscale' --data-binary @body.json      # then poll and fetch as in First job
 ```
 
-Time grows in steps of 21 source frames (one FlashVSR group): about 104 s per group at 1920×1152 on the M5
-above (42 frames ≈ 3.5 min, 56 frames ≈ 5.2 min). It is as heavy on memory as `final`. Request and details:
-[docs/api.md](docs/api.md#workflow-flashvsr-upscale).
+Time grows in steps of 21 source frames (one FlashVSR group), about 101 s per group at 1920×1152 on the M5
+above: 2.3 s ≈ 5.1 min, 3.0 s ≈ 6.9 min, 8.0 s ≈ 17 min at 24 fps. It is as heavy on memory as `final`.
+Request and details: [docs/api.md](docs/api.md#workflow-flashvsr-upscale).
 
 ## Requirements
 
@@ -212,8 +212,8 @@ Keep workflows closed: clients choose parameters, never file paths or stage grap
   generation slows both down or exhausts memory.
 - `final` × 243 frames is the heaviest job: on the 32 GB M5 free memory bottomed out at 18 % and swap grew from
   9.7 GB to 14.8 GB (it finished fine). On a 16 GB Mac, try a short `final` clip before relying on long ones.
-- `flashvsr-upscale` at 1920×1152 is in the same class: free memory went down to 16 % and swap grew from 7.5 GB to
-  17 GB in a 3-group run.
+- `flashvsr-upscale` at 1920×1152 is in the same class: free memory went down to 13 % and swap peaked at 18 GB
+  (8 s clip).
 - An upscale also needs disk for lossless intermediates, about 4.5 MB a frame at 1920×1152 (a 10 s take at 24 fps
   ≈ 1.1 GB, a 40 s clip at 60 fps ≈ 11 GB). They are deleted when the job ends.
 - Use AC power for long batches — on battery a Mac throttles and drains quickly.
