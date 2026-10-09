@@ -2,7 +2,8 @@
 
 Text to video, optionally anchored to a first frame (and a last frame). The clip is
 generated at a size tier that keeps the run practical on Apple Silicon, then scaled to
-exactly the requested output size. Audio is always dropped.
+exactly the requested output size, or with ``native`` only cropped to its shape. Audio is
+always dropped.
 """
 
 from __future__ import annotations
@@ -12,11 +13,18 @@ import math
 import secrets
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from vpipe_api.media import MediaError, finalize_video, normalize_image, probe_video
+from vpipe_api.media import (
+    MediaError,
+    VideoInfo,
+    finalize_cropped,
+    finalize_video,
+    normalize_image,
+    probe_video,
+)
 from vpipe_api.workflows.base import (
     InvalidParamsError,
     MediaTools,
@@ -58,6 +66,21 @@ def generation_size(width: int, height: int, quality: str) -> tuple[int, int]:
     return sizes[quality]
 
 
+def native_size(generation: tuple[int, int], output: tuple[int, int]) -> tuple[int, int]:
+    """The largest centred crop of ``generation`` with ``output``'s aspect ratio, in even
+    pixels for 4:2:0 (at most 1 px off the exact ratio; generation sizes are even): about
+    what ``finalize_video`` keeps of the clip before it scales it."""
+    gen_w, gen_h = generation
+    out_w, out_h = output
+    if out_w * gen_h >= out_h * gen_w:  # the output is wider: keep every column
+        return gen_w, min(gen_h, _even(gen_w * out_h / out_w))
+    return min(gen_w, _even(gen_h * out_w / out_h)), gen_h
+
+
+def _even(value: float) -> int:
+    return 2 * round(value / 2)
+
+
 class ImageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,6 +101,8 @@ class H3VideoParams(BaseModel):
     """POST body for ``minimax-h3-turbo-video``."""
 
     model_config = ConfigDict(extra="forbid")
+    # added after 0.1.2; see jobs.queue.fingerprint
+    LATE_FIELDS: ClassVar[frozenset[str]] = frozenset({"native"})
 
     prompt: str = Field(min_length=1, max_length=4000)
     output: OutputSize
@@ -89,6 +114,11 @@ class H3VideoParams(BaseModel):
     )
     seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
     steps: int = Field(default=6, ge=4, le=8)
+    native: bool = Field(
+        default=False,
+        description="return the clip at its generation size, only centre-cropped to the "
+        "shape of output (1920x1080 at final: 1344x756), instead of scaled to output",
+    )
     start_image: ImageInput | None = None
     end_image: ImageInput | None = None
 
@@ -154,7 +184,7 @@ class H3VideoWorkflow(Workflow):
     id = "minimax-h3-turbo-video"
     description = (
         "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, "
-        "scaled to the requested size, no audio"
+        "scaled to the requested size (or with native, cropped to its shape), no audio"
     )
     output_media_type = "video/mp4"
     params_model = H3VideoParams
@@ -231,7 +261,6 @@ class H3VideoWorkflow(Workflow):
     def finalize(
         self, job_id: str, params: Mapping[str, Any], job_dir: Path, prepared: PreparedRun
     ) -> WorkflowOutput:
-        out = params["output"]
         final = job_dir / "output.mp4"
         try:
             raw = probe_video(prepared.raw_output, self.media.ffprobe)
@@ -241,15 +270,7 @@ class H3VideoWorkflow(Workflow):
                     f"vpipe rendered {raw.frames} frames, expected {params['frames']}",
                     retryable=False,
                 )
-            finalize_video(
-                prepared.raw_output,
-                final,
-                width=out["width"],
-                height=out["height"],
-                fps=FPS,
-                comment=f"vpipe-job:{job_id}",
-                ffmpeg=self.media.ffmpeg,
-            )
+            self._render(job_id, params, raw, prepared.raw_output, final)
             info = probe_video(final, self.media.ffprobe)
         except MediaError as exc:
             raise WorkflowFailedError("postprocess_failed", str(exc), retryable=True) from exc
@@ -276,6 +297,24 @@ class H3VideoWorkflow(Workflow):
                     }
                 },
             },
+        )
+
+    def _render(
+        self, job_id: str, params: Mapping[str, Any], raw: VideoInfo, src: Path, dst: Path
+    ) -> None:
+        """Scale to ``output``; with ``native``, crop the generation size to its shape."""
+        output = (params["output"]["width"], params["output"]["height"])
+        native = params.get("native", False)  # absent in jobs queued by an older server
+        size = native_size((raw.width, raw.height), output) if native else output
+        finish = finalize_cropped if native else finalize_video
+        finish(
+            src,
+            dst,
+            width=size[0],
+            height=size[1],
+            fps=FPS,
+            comment=f"vpipe-job:{job_id}",
+            ffmpeg=self.media.ffmpeg,
         )
 
     def smoke_params(self) -> dict[str, Any]:

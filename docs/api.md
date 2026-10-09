@@ -59,7 +59,7 @@ model-fetch`) is not counted.
   "workflows": [
     {
       "id": "minimax-h3-turbo-video",
-      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, scaled to the requested size, no audio",
+      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, scaled to the requested size (or with native, cropped to its shape), no audio",
       "params_schema": { "...": "JSON Schema of the POST body" },
       "output_media_type": "video/mp4"
     }
@@ -141,11 +141,12 @@ POST body:
 | field | type | default | notes |
 |---|---|---|---|
 | `prompt` | string, 1–4000 chars | — | Describe the picture (audio is discarded). |
-| `output` | `{width, height}` ints | — | Final size; 64–4096 each. Aspect must be within 16:9 … 9:16. The clip is generated smaller and scaled (cover + center crop, lanczos). |
+| `output` | `{width, height}` ints | — | Final size; 64–4096 each. Aspect must be within 16:9 … 9:16. The clip is generated smaller and scaled (cover + center crop, lanczos). With `native`, only its shape counts. |
 | `frames` | int | `124` | Must be `17n+5` in `56..243` (56 = 2.33 s … 243 = 10.125 s at 24 fps). Delivered as-is, never trimmed. |
 | `quality` | `"draft"` \| `"standard"` \| `"final"` | `"standard"` | Generation size tier (see table). |
 | `seed` | int ≥ 0 \| null | random | Echoed back as `result.seed_used`. |
 | `steps` | int 4–8 | `6` | Turbo LoRA denoise steps. |
+| `native` | bool | `false` | Return the clip at its generation size, only center-cropped to the shape of `output` (see below). |
 | `start_image` | image \| null | null | First frame anchor. |
 | `end_image` | image \| null | null | Last frame anchor. Requires `start_image`. |
 
@@ -163,6 +164,12 @@ Generation size (chosen from the output aspect ratio; the closest ratio row is u
 `final` is H3's training resolution (short side 768): the most detail, about 3× the time of `draft` at 16:9 or
 9:16 (about 2.2× at 4:5). At 1:1 it is the same size as `standard`. The same seed and prompt at a different
 generation size give a different clip, not an upscale of it.
+
+With `native: true` nothing is scaled: the generation size is center-cropped to the aspect ratio of `output`,
+in even pixels (at most 1 px off the exact ratio), and the crop is exactly centered. For `output` 1920×1080
+that is 1344×756 at `final`, 1024×576 at `standard` and 832×468 at `draft`; for 1080×1920 at `final`, 756×1344.
+It is about the part of the frame the scaled output shows, and the encode below is otherwise the same.
+`result.output` gives the size of the returned file; `details.generation` still gives the size before the crop.
 
 Output: H.264 MP4 (yuv420p, limited-range BT.709), 24 fps, **no audio track**, metadata
 `comment=vpipe-job:<job_id>`. vpipe writes a lossless FFV1 intermediate, so this encode is the only lossy step.

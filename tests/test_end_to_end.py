@@ -19,6 +19,17 @@ from vpipe_api.settings import Settings
 from vpipe_api.workflows import build_registry
 
 
+def _wait(client: TestClient, job_id: str, timeout: float = 60) -> dict:
+    deadline = time.monotonic() + timeout
+    body: dict = {}
+    while time.monotonic() < deadline:
+        body = client.get(f"/v1/jobs/{job_id}").json()
+        if body["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.1)
+    return body
+
+
 @needs_ffmpeg
 def test_first_frame_job_over_http(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -50,13 +61,7 @@ def test_first_frame_job_over_http(
                 "start_image": {"data": image, "media_type": "image/png"},
             },
         ).json()
-        deadline = time.monotonic() + 60
-        body: dict = {}
-        while time.monotonic() < deadline:
-            body = client.get(f"/v1/jobs/{job['id']}").json()
-            if body["status"] in ("succeeded", "failed"):
-                break
-            time.sleep(0.1)
+        body = _wait(client, job["id"])
         assert body["status"] == "succeeded", body
         assert body["result"]["output"] == {
             "media_type": "video/mp4",
@@ -81,6 +86,57 @@ def test_first_frame_job_over_http(
 
 
 @needs_ffmpeg
+def test_native_job_returns_the_generation_size_cropped_to_the_output_shape(
+    settings: Settings, tmp_path: Path
+) -> None:
+    vpipe_bin, work_dir = settings.require_runtime()
+    registry = build_registry(settings)
+    queue = JobQueue(
+        JobStore(settings.data_dir),
+        registry,
+        VpipeRunner(vpipe_bin, work_dir),
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+    )
+    app = create_app(queue, registry, token=None, max_body_bytes=1 << 20)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        job = client.post(
+            "/v1/workflows/minimax-h3-turbo-video/jobs",
+            json={
+                "prompt": "a lake",
+                "output": {"width": 1920, "height": 1080},
+                "frames": 56,
+                "quality": "draft",
+                "native": True,
+            },
+        ).json()
+        body = _wait(client, job["id"])
+        assert body["status"] == "succeeded", body
+        assert body["result"]["output"] == {
+            "media_type": "video/mp4",
+            "width": 832,
+            "height": 468,
+            "frames": 56,
+            "fps": 24,
+            "duration_sec": 2.333,
+        }
+        generation = body["result"]["details"]["generation"]
+        assert (generation["width"], generation["height"]) == (832, 480)  # before the crop
+        out = tmp_path / "out.mp4"
+        out.write_bytes(client.get(f"/v1/jobs/{job['id']}/output").content)
+
+    info = probe_video(out)
+    assert (info.width, info.height, info.frames, info.fps, info.has_audio) == (
+        832,
+        468,
+        56,
+        24.0,
+        False,
+    )
+
+
+@needs_ffmpeg
 def test_stage_failure_marks_job_failed(settings: Settings, fake_mode) -> None:
     fake_mode("stage_fail")
     vpipe_bin, work_dir = settings.require_runtime()
@@ -99,13 +155,7 @@ def test_stage_failure_marks_job_failed(settings: Settings, fake_mode) -> None:
             "/v1/workflows/minimax-h3-turbo-video/jobs",
             json={"prompt": "x", "output": {"width": 832, "height": 480}, "frames": 56},
         ).json()
-        deadline = time.monotonic() + 30
-        body: dict = {}
-        while time.monotonic() < deadline:
-            body = client.get(f"/v1/jobs/{job['id']}").json()
-            if body["status"] == "failed":
-                break
-            time.sleep(0.1)
+        body = _wait(client, job["id"])
     assert body["error"]["code"] == "generation_failed"
     assert "generate-video" in body["error"]["message"]
 
@@ -192,13 +242,7 @@ def test_upscale_job_over_http_keeps_every_source_frame(
             json={"source_video": video, "output": {"width": 1920, "height": 1080}},
             headers={"Idempotency-Key": "take-1-upscale"},
         ).json()
-        deadline = time.monotonic() + 60
-        body: dict = {}
-        while time.monotonic() < deadline:
-            body = client.get(f"/v1/jobs/{job['id']}").json()
-            if body["status"] in ("succeeded", "failed"):
-                break
-            time.sleep(0.1)
+        body = _wait(client, job["id"])
         assert body["status"] == "succeeded", body
         assert body["result"]["output"] == {
             "media_type": "video/mp4",

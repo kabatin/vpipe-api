@@ -1,3 +1,4 @@
+import base64
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,10 +13,13 @@ from vpipe_api.jobs.queue import (
     JobNotFoundError,
     JobQueue,
     QueueFullError,
+    fingerprint,
     redact,
 )
 from vpipe_api.jobs.store import JobStore
 from vpipe_api.workflows.base import InvalidParamsError, WorkflowRegistry, phase_progress
+from vpipe_api.workflows.flashvsr import FlashVsrParams
+from vpipe_api.workflows.h3_video import H3VideoParams
 
 
 def wait_for(predicate, timeout: float = 5.0) -> None:
@@ -316,6 +320,21 @@ def test_idempotency_key_returns_the_same_job(queue: JobQueue, runner: FakeRunne
     assert queue.refusal("echo", "gen-1") is None
     assert queue.refusal("echo", "gen-3") is not None
     assert queue.refusal("echo", None) is not None
+
+
+def test_keys_made_by_0_1_2_still_match() -> None:
+    # Stored jobs keep the digest they were made with; a params field added since must not
+    # change it while the field holds its default. The digests were computed by 0.1.2.
+    body = {"prompt": "a lake", "output": {"width": 1920, "height": 1080}, "seed": 7}
+    h3 = H3VideoParams.model_validate(body | {"quality": "final"})
+    old_h3 = "85b1176422e770291bfa3eed95d191461037608f81e57ca0e8a19a3f08e9446f"
+    assert fingerprint("minimax-h3-turbo-video", h3) == old_h3
+    native = h3.model_copy(update={"native": True})
+    assert fingerprint("minimax-h3-turbo-video", native) != old_h3
+    video = {"data": base64.b64encode(b"take").decode(), "media_type": "video/mp4"}
+    upscale = FlashVsrParams.model_validate({"source_video": video})
+    old_upscale = "3effa67d1a7390de5efcee70b7ddf887a4fb8085f269ffc4e2830e51c567f89d"
+    assert fingerprint("flashvsr-upscale", upscale) == old_upscale
 
 
 def test_idempotency_index_survives_restart(tmp_path: Path, runner: FakeRunner) -> None:

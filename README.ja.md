@@ -40,7 +40,7 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3)（FL2VA、8bit）に、コミュニティ製の
 [Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) を組み合わせる。
 - テキストから動画を作る。開始フレームと終了フレームを画像で指定することもできる
-- 現実的な時間で終わるサイズで生成し、指定した解像度ちょうどに拡大する（lanczos、はみ出す分は中央で切り抜き）
+- 現実的な時間で終わるサイズで生成し、指定した解像度ちょうどに拡大する（lanczos、はみ出す分は中央で切り抜き。`native` なら拡大せず比率に切り抜くだけ）
 - 音声は捨てる
 
 | | |
@@ -49,6 +49,7 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 | 長さ | `frames` は 17n+5：56（2.33 秒）〜243（10.125 秒） |
 | 画質段 | `draft`（16:9 なら 832×480）・`standard`（1024×576）・`final`（1344×768。H3 の学習時の解像度） |
 | 開始・終了フレーム | `start_image`・`end_image`（base64 の PNG/JPEG/WebP、20MB 以下。終了フレームには開始フレームが必須） |
+| 生成サイズのまま | `native: true` なら拡大せず、生成サイズを指定の比率に中央で切り抜くだけ（`final` で 1920×1080 なら 1344×756）。拡大を自分で行う使い手向け |
 
 実測（M5 MacBook Pro、GPU 10 コア、32GB、6 ステップ）
 

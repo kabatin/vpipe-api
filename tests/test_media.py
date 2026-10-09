@@ -1,5 +1,6 @@
 import io
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,13 @@ from tests.conftest import make_png, needs_ffmpeg
 from vpipe_api.media import (
     IMAGE_DECODERS,
     MediaError,
+    finalize_cropped,
     finalize_video,
     normalize_image,
     probe_video,
 )
+
+Finalize = Callable[..., None]
 
 
 def test_normalize_png(tmp_path: Path) -> None:
@@ -120,15 +124,18 @@ def _lossless_clip(
     audio: bool = False,
     tagged: bool = True,
     rate: int = 24,
+    paint: str = "",
 ) -> Path:
     """A clip shaped like vpipe's intermediate: FFV1, 4:4:4, full-range BT.709 samples.
 
     ``tagged=False`` keeps the full-range samples but drops the colour tags, as a remux can.
+    ``paint`` is a filter that writes those samples directly (``geq`` on 4:4:4).
     """
     tags = ("range=pc:colorspace=bt709:color_primaries=bt709:color_trc=bt709", "-color_range", "pc")
     if not tagged:
         tags = ("range=unknown:colorspace=unknown:color_primaries=unknown:color_trc=unknown",)
-    vf = f"scale=out_range=pc:out_color_matrix=bt709,format=yuv444p,setparams={tags[0]}"
+    painted = f"{paint}," if paint else ""
+    vf = f"scale=out_range=pc:out_color_matrix=bt709,format=yuv444p,{painted}setparams={tags[0]}"
     # -color_range pc, or format negotiation converts tagged full-range samples to tv
     codec = ["-c:v", "ffv1", "-pix_fmt", "yuv444p", *tags[1:]]
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{source}:rate={rate}"]
@@ -179,13 +186,17 @@ def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
     assert not dst.with_suffix(".part.mp4").exists()
 
 
+FINALIZERS = pytest.mark.parametrize("finalize", [finalize_video, finalize_cropped])
+
+
 @needs_ffmpeg
-def test_finalize_stamps_the_given_frame_rate(tmp_path: Path) -> None:
+@FINALIZERS
+def test_finalize_stamps_the_given_frame_rate(tmp_path: Path, finalize: Finalize) -> None:
     # vpipe's Matroska has millisecond timestamps and no frame rate; with large FFV1 frames
     # ffmpeg guesses the rate from a couple of them (24000/1001, 293/12). Here they say 25.
     src = _lossless_clip(tmp_path / "raw.mkv", rate=25)
     dst = tmp_path / "o.mp4"
-    finalize_video(src, dst, width=320, height=192, fps=24, comment="x")
+    finalize(src, dst, width=320, height=192, fps=24, comment="x")
     fields = _stream_fields(dst, "r_frame_rate,avg_frame_rate,nb_frames,duration")
     assert fields == {
         "r_frame_rate": "24/1",
@@ -206,6 +217,10 @@ def test_finalize_reencodes_a_lossless_source_of_the_same_size(tmp_path: Path) -
 
 @needs_ffmpeg
 @pytest.mark.parametrize(
+    ("finalize", "size"),
+    [(finalize_video, (640, 360)), (finalize_cropped, (320, 180))],  # a real lanczos upscale
+)
+@pytest.mark.parametrize(
     ("color", "tagged", "full"),
     [
         ("white", True, 255),
@@ -215,14 +230,14 @@ def test_finalize_reencodes_a_lossless_source_of_the_same_size(tmp_path: Path) -
     ],
 )
 def test_finalize_outputs_limited_range_bt709(
-    tmp_path: Path, color: str, tagged: bool, full: int
+    tmp_path: Path, finalize: Finalize, size: tuple[int, int], color: str, tagged: bool, full: int
 ) -> None:
     src = _lossless_clip(tmp_path / "raw.mkv", f"color={color}:s=320x192", tagged=tagged)
     assert (_stream_fields(src, "color_range")["color_range"] == "pc") is tagged
     source_luma = _mean_luma(src)
     assert abs(source_luma - full) <= 3  # full-range samples (older ffmpeg rounds a little)
     dst = tmp_path / "o.mp4"
-    finalize_video(src, dst, width=640, height=360, fps=24, comment="x")
+    finalize(src, dst, width=size[0], height=size[1], fps=24, comment="x")
     assert _stream_fields(dst, "color_range,color_space,color_primaries,color_transfer") == {
         "color_range": "tv",
         "color_space": "bt709",
@@ -230,6 +245,49 @@ def test_finalize_outputs_limited_range_bt709(
         "color_transfer": "bt709",
     }
     assert abs(_mean_luma(dst) - (16 + 219 * source_luma / 255)) <= 1.5
+
+
+def _luma_lines(path: Path, width: int, height: int, axis: str) -> list[float]:
+    """Mean luma of each row (``axis`` "Y") or column ("X") of the first frame."""
+    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-vf", "extractplanes=y"]
+    raw = subprocess.run(
+        [*cmd, "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True
+    ).stdout
+    assert len(raw) == width * height
+    if axis == "Y":
+        return [sum(raw[y * width : (y + 1) * width]) / width for y in range(height)]
+    return [sum(raw[x::width]) / height for x in range(width)]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("axis", "size"), [("Y", (768, 754)), ("X", (754, 768))])
+def test_finalize_cropped_keeps_the_centre_at_the_source_size(
+    tmp_path: Path, axis: str, size: tuple[int, int]
+) -> None:
+    # 768 lines to 754 drops 7 on each side: an odd offset that 4:2:0 cannot crop at
+    bands = f"if(lt({axis},7)+gte({axis},761),0,if(eq({axis},7)+eq({axis},760),255,128))"
+    paint = f"geq=lum='{bands}':cb=128:cr=128"
+    src = _lossless_clip(tmp_path / "raw.mkv", "color=gray:s=768x768", paint=paint)
+    assert [round(v) for v in _luma_lines(src, 768, 768, axis)[5:9]] == [0, 0, 255, 128]
+    dst = tmp_path / "out" / "o.mp4"
+    finalize_cropped(src, dst, width=size[0], height=size[1], fps=24, comment="vpipe-job:abc")
+    info = probe_video(dst)
+    assert (info.width, info.height, info.frames, info.has_audio) == (*size, 24, False)
+    lines = _luma_lines(dst, *size, axis)
+    white, grey = 16 + 219, 16 + 219 * 128 / 255
+    assert abs(lines[0] - white) < 12 and abs(lines[-1] - white) < 12  # source lines 7, 760
+    assert all(abs(v - grey) < 12 for v in lines[2:-2])
+    assert _stream_fields(dst, "pix_fmt,sample_aspect_ratio") == {
+        "pix_fmt": "yuv420p",
+        "sample_aspect_ratio": "1:1",
+    }
+
+
+@needs_ffmpeg
+def test_finalize_cropped_cannot_grow_the_clip(tmp_path: Path) -> None:
+    src = _lossless_clip(tmp_path / "raw.mkv")
+    with pytest.raises(MediaError, match="exited"):
+        finalize_cropped(src, tmp_path / "o.mp4", width=640, height=360, fps=24, comment="x")
 
 
 def test_missing_binary_is_a_media_error(tmp_path: Path) -> None:

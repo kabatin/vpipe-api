@@ -101,8 +101,17 @@ def redact(message: str) -> str:
 
 
 def fingerprint(workflow_id: str, params: BaseModel) -> str:
+    """The params' digest for Idempotency-Key. Stored jobs keep the digest they were made
+    with, so a field added to a params model later is named in its ``LATE_FIELDS`` and left
+    out while it holds its default: the same request still matches keys made before."""
+    fields = type(params).model_fields
+    late = {
+        name
+        for name in getattr(type(params), "LATE_FIELDS", ())
+        if getattr(params, name) == fields[name].default
+    }
     digest = hashlib.sha256(workflow_id.encode())
-    digest.update(params.model_dump_json().encode())
+    digest.update(params.model_dump_json(exclude=late).encode())
     return digest.hexdigest()
 
 

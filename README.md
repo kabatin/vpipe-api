@@ -33,7 +33,7 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) (FL2VA, 8-bit) with the community
 [Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora): text → video, optionally anchored to a
 first frame and a last frame. The clip is generated at a practical size and scaled (lanczos, cover + center crop)
-to exactly the resolution you ask for; audio is dropped.
+to exactly the resolution you ask for (or with `native`, only cropped to its shape); audio is dropped.
 
 | | |
 |---|---|
@@ -41,6 +41,7 @@ to exactly the resolution you ask for; audio is dropped.
 | Length | `frames` = 17n+5: 56 (2.33 s) … 243 (10.125 s) |
 | Quality tiers | `draft` (e.g. 832×480 for 16:9) · `standard` (1024×576) · `final` (1344×768, H3's training size) |
 | Anchors | `start_image`, `end_image` (base64 PNG/JPEG/WebP ≤ 20 MB; end needs start) |
+| Native size | `native: true` returns the generation size, only center-cropped to the requested shape (1920×1080 at `final`: 1344×756), for clients that scale it themselves |
 
 Measured on an M5 MacBook Pro (10-core GPU, 32 GB), 6 steps:
 

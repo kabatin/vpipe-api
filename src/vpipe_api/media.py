@@ -185,6 +185,27 @@ def finalize_video(
     _encode([*_vpipe_input(src, fps), "-an", "-vf", vf], dst, comment, ffmpeg)
 
 
+def finalize_cropped(
+    src: Path,
+    dst: Path,
+    *,
+    width: int,
+    height: int,
+    fps: int | Fraction,
+    comment: str,
+    ffmpeg: str = "ffmpeg",
+) -> None:
+    """``finalize_video`` without the scaling: centre-crop to ``width``x``height`` (no
+    larger than the source) at the source's own pixels.
+
+    The crop comes first, on the 4:4:4 intermediate, so an odd offset stays exact (a crop
+    after the conversion to 4:2:0 rounds it down to even; ``exact`` keeps it so even then).
+    """
+    crop = f"crop={width}:{height}:exact=1"
+    vf = f"{crop},scale=flags=lanczos{_FROM_FULL_BT709},{_AS_LIMITED_BT709}"
+    _encode([*_vpipe_input(src, fps), "-an", "-vf", vf], dst, comment, ffmpeg)
+
+
 def probe_source(path: Path, ffprobe: str = "ffprobe") -> SourceInfo:
     """Read an uploaded MP4 with the untrusted-input limits; the error says what to fix.
 

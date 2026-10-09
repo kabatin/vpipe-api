@@ -1,13 +1,14 @@
 import base64
 import io
+import subprocess
 from pathlib import Path
 
 import pytest
 from PIL import Image
 from pydantic import ValidationError
 
-from tests.conftest import make_png
-from vpipe_api.workflows.base import InvalidParamsError, MediaTools
+from tests.conftest import make_png, needs_ffmpeg
+from vpipe_api.workflows.base import InvalidParamsError, MediaTools, PreparedRun
 from vpipe_api.workflows.h3_graph import H3GraphInputs, H3GraphOptions, build_h3_spec
 from vpipe_api.workflows.h3_video import (
     MAX_IMAGE_BYTES,
@@ -15,6 +16,7 @@ from vpipe_api.workflows.h3_video import (
     H3VideoParams,
     H3VideoWorkflow,
     generation_size,
+    native_size,
 )
 
 BASE = {"prompt": "a lake", "output": {"width": 1920, "height": 1080}}
@@ -42,6 +44,7 @@ def test_invalid_frames(frames: int) -> None:
 def test_defaults_and_prompt_strip() -> None:
     p = params(prompt="  sunset  ")
     assert (p.prompt, p.frames, p.quality, p.steps, p.seed) == ("sunset", 124, "standard", 6, None)
+    assert p.native is False
 
 
 @pytest.mark.parametrize(
@@ -52,6 +55,7 @@ def test_defaults_and_prompt_strip() -> None:
         {"steps": 9},
         {"seed": -1},
         {"quality": "ultra"},
+        {"native": "maybe"},
         {"extra": 1},
     ],
 )
@@ -98,6 +102,29 @@ def test_generation_size(out: tuple[int, int], quality: str, expected: tuple[int
     assert generation_size(*out, quality) == expected
 
 
+@pytest.mark.parametrize(
+    ("generation", "out", "expected"),
+    [
+        ((1344, 768), (1920, 1080), (1344, 756)),
+        ((832, 480), (1920, 1080), (832, 468)),
+        ((832, 480), (1280, 720), (832, 468)),
+        ((1024, 576), (1920, 1080), (1024, 576)),  # already 16:9: nothing to crop
+        ((768, 1344), (1080, 1920), (756, 1344)),
+        ((768, 768), (1080, 1080), (768, 768)),
+        ((768, 960), (1080, 1350), (768, 960)),
+        ((1344, 768), (1600, 1080), (1138, 768)),  # 3:2 uses the 16:9 row; 1137.8 columns
+        ((768, 768), (1440, 1080), (768, 576)),  # 1:1 generation, 4:3 output
+        ((1344, 768), (1000, 562), (1344, 756)),  # 755.3 rows, to the nearest even
+        ((640, 640), (1000, 990), (640, 634)),  # 633.6
+        ((768, 768), (768, 754), (768, 754)),  # 7 rows off each side: odd, still centred
+    ],
+)
+def test_native_size(
+    generation: tuple[int, int], out: tuple[int, int], expected: tuple[int, int]
+) -> None:
+    assert native_size(generation, out) == expected
+
+
 def test_estimate_grows_with_work() -> None:
     wf = H3VideoWorkflow(MediaTools())
     draft = wf.estimate_seconds(params(quality="draft").model_dump())
@@ -118,6 +145,7 @@ def test_store_inputs_writes_png_and_seed(tmp_path: Path) -> None:
     assert stored["start_image"] == "inputs/start_image.png"
     assert stored["end_image"] is None
     assert isinstance(stored["seed"], int)
+    assert stored["native"] is False
     assert (tmp_path / "job" / "inputs" / "start_image.png").read_bytes()[:4] == b"\x89PNG"
     assert "data" not in str(stored)
 
@@ -210,3 +238,20 @@ def test_required_models_follow_options() -> None:
 def test_unknown_option_rejected() -> None:
     with pytest.raises(ValidationError):
         H3VideoWorkflow(MediaTools(), {"bogus": 1})
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("native", "expected"), [(None, (1280, 720)), (True, (832, 468))])
+def test_finalize_size(tmp_path: Path, native: bool | None, expected: tuple[int, int]) -> None:
+    raw = tmp_path / "raw.mkv"
+    clip = ["-f", "lavfi", "-i", "testsrc=s=832x480:r=24", "-frames:v", "56", "-c:v", "ffv1"]
+    subprocess.run(["ffmpeg", "-v", "error", *clip, "-pix_fmt", "yuv444p", str(raw)], check=True)
+    wf = H3VideoWorkflow(MediaTools())
+    stored = wf.store_inputs(params(output={"width": 1280, "height": 720}, frames=56), tmp_path)
+    if native is None:  # a job queued by 0.1.2, before "native" existed
+        stored = {k: v for k, v in stored.items() if k != "native"}
+    else:
+        stored = stored | {"native": native}
+    out = wf.finalize("job_x", stored, tmp_path, PreparedRun(spec={}, raw_output=raw))
+    assert (out.result["output"]["width"], out.result["output"]["height"]) == expected
+    assert (out.result["details"]["generation"]["width"], out.file.exists()) == (832, True)
