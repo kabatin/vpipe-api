@@ -41,7 +41,7 @@ Every non-2xx response uses the same shape:
 ### `GET /v1/health`
 
 ```json
-{ "status": "ok", "version": "0.1.2", "running": 1, "waiting": 0, "max_waiting": 1, "outside_runs": 0 }
+{ "status": "ok", "version": "0.1.3", "running": 1, "waiting": 0, "max_waiting": 1, "outside_runs": 0 }
 ```
 
 `running` / `waiting` count this server's jobs. `outside_runs` counts `vpipe` command-line runs

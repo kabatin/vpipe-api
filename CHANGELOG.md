@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 — 2026-10-09
 
 - `minimax-h3-turbo-video` takes `native: true`: the clip comes back at its generation size, only
   center-cropped to the shape of `output` (1920×1080 at `final`: 1344×756), for clients that scale it
