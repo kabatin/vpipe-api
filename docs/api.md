@@ -144,7 +144,7 @@ POST body:
 | `output` | `{width, height}` ints | — | Final size; 64–4096 each. Aspect must be within 16:9 … 9:16. The clip is generated smaller and scaled (cover + center crop, lanczos). With `native`, only its shape counts. |
 | `frames` | int | `124` | Must be `17n+5` in `56..243` (56 = 2.33 s … 243 = 10.125 s at 24 fps). Delivered as-is, never trimmed. |
 | `quality` | `"draft"` \| `"standard"` \| `"final"` | `"standard"` | Generation size tier (see table). |
-| `seed` | int ≥ 0 \| null | random | Echoed back as `result.seed_used`. |
+| `seed` | int ≥ 0 \| null | random | Echoed back as `result.seed_used`. Not a guarantee of the same clip (see below). |
 | `steps` | int 4–8 | `6` | Turbo LoRA denoise steps. |
 | `native` | bool | `false` | Return the clip at its generation size, only center-cropped to the shape of `output` (see below). |
 | `start_image` | image \| null | null | First frame anchor. |
@@ -164,6 +164,11 @@ Generation size (chosen from the output aspect ratio; the closest ratio row is u
 `final` is H3's training resolution (short side 768): the most detail, about 3× the time of `draft` at 16:9 or
 9:16 (about 2.2× at 4:5). At 1:1 it is the same size as `standard`. The same seed and prompt at a different
 generation size give a different clip, not an upscale of it.
+
+Nor do the same params and seed always give the same clip twice. Two runs back to back have matched frame
+for frame, but the same request half an hour later gave a different picture. The most likely cause: vpipe picks
+some GPU kernels by timing them at each run, their results differ in the last digits, and the diffusion
+amplifies that. To keep a clip, keep its MP4, not just its seed.
 
 With `native: true` nothing is scaled: the generation size is center-cropped to the aspect ratio of `output`,
 in even pixels (at most 1 px off the exact ratio), and the crop is exactly centered. For `output` 1920×1080
