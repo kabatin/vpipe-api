@@ -122,6 +122,7 @@ def _lossless_clip(
     source: str = "testsrc=size=320x192",
     *,
     audio: bool = False,
+    audio_seconds: float | None = None,
     tagged: bool = True,
     rate: int = 24,
     paint: str = "",
@@ -130,6 +131,7 @@ def _lossless_clip(
 
     ``tagged=False`` keeps the full-range samples but drops the colour tags, as a remux can.
     ``paint`` is a filter that writes those samples directly (``geq`` on 4:4:4).
+    ``audio_seconds`` makes the audio that long instead of a little longer than the video.
     """
     tags = ("range=pc:colorspace=bt709:color_primaries=bt709:color_trc=bt709", "-color_range", "pc")
     if not tagged:
@@ -140,7 +142,9 @@ def _lossless_clip(
     codec = ["-c:v", "ffv1", "-pix_fmt", "yuv444p", *tags[1:]]
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{source}:rate={rate}"]
     if audio:
-        cmd += ["-f", "lavfi", "-i", "sine=sample_rate=32000", "-shortest", "-c:a", "aac"]
+        length = f":duration={audio_seconds}" if audio_seconds else ""
+        cmd += ["-f", "lavfi", "-i", f"sine=sample_rate=32000{length}", "-c:a", "aac"]
+        cmd += [] if audio_seconds else ["-shortest"]
     subprocess.run([*cmd, "-vf", vf, "-frames:v", "24", *codec, str(path)], check=True)
     return path
 
@@ -187,6 +191,29 @@ def test_finalize_scales_crops_and_drops_audio(tmp_path: Path) -> None:
 
 
 FINALIZERS = pytest.mark.parametrize("finalize", [finalize_video, finalize_cropped])
+
+
+@needs_ffmpeg
+@FINALIZERS
+@pytest.mark.parametrize("audio_seconds", [None, 0.5])  # vpipe's runs a little long; or short
+def test_finalize_keeps_the_audio_when_asked(
+    tmp_path: Path, finalize: Finalize, audio_seconds: float | None
+) -> None:
+    src = _lossless_clip(tmp_path / "raw.mkv", audio=True, audio_seconds=audio_seconds)
+    dst = tmp_path / "o.mp4"
+    finalize(src, dst, width=320, height=192, fps=24, comment="x", audio_seconds=1.0)
+    info = probe_video(dst)
+    assert (info.frames, info.has_audio) == (24, True)
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries"]
+    out = subprocess.run(
+        [*cmd, "stream=codec_name,duration", "-of", "default=nw=1", str(dst)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    sound = dict(line.split("=", 1) for line in out.split())
+    assert sound["codec_name"] == "aac"
+    assert abs(float(sound["duration"]) - 1.0) < 0.005  # cut or padded to the 24 frames
 
 
 @needs_ffmpeg

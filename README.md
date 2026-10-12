@@ -33,11 +33,12 @@ GET  /v1/jobs/{id}/output                        → video/mp4
 [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) (FL2VA, 8-bit) with the community
 [Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora): text → video, optionally anchored to a
 first frame and a last frame. The clip is generated at a practical size and scaled (lanczos, cover + center crop)
-to exactly the resolution you ask for (or with `native`, only cropped to its shape); audio is dropped.
+to exactly the resolution you ask for (or with `native`, only cropped to its shape); H3's soundtrack is dropped
+unless you keep it with `audio`.
 
 | | |
 |---|---|
-| Output | any size 64–4096 px, aspect 16:9 … 9:16; H.264 MP4 (limited-range BT.709), 24 fps, no audio. vpipe writes a lossless intermediate, so this encode is the only lossy step |
+| Output | any size 64–4096 px, aspect 16:9 … 9:16; H.264 MP4 (limited-range BT.709), 24 fps, silent (or with `audio: true`, H3's soundtrack as AAC). vpipe writes a lossless intermediate, so this encode is the only lossy step |
 | Length | `frames` = 17n+5: 56 (2.33 s) … 243 (10.125 s) |
 | Quality tiers | `draft` (e.g. 832×480 for 16:9) · `standard` (1024×576) · `final` (1344×768, H3's training size) |
 | Anchors | `start_image`, `end_image` (base64 PNG/JPEG/WebP ≤ 20 MB; end needs start) |

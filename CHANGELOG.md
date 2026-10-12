@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `minimax-h3-turbo-video` takes `audio: true`: the clip keeps H3's soundtrack (dialogue, sound effects,
+  music), which the model generates with the picture anyway, as AAC ending with the last frame. Without it,
+  the clip stays silent as before. A clip vpipe returns without a soundtrack fails with `unexpected_output`.
+
 ## 0.1.3 — 2026-10-09
 
 - `minimax-h3-turbo-video` takes `native: true`: the clip comes back at its generation size, only

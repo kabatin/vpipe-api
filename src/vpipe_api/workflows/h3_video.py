@@ -2,8 +2,8 @@
 
 Text to video, optionally anchored to a first frame (and a last frame). The clip is
 generated at a size tier that keeps the run practical on Apple Silicon, then scaled to
-exactly the requested output size, or with ``native`` only cropped to its shape. Audio is
-always dropped.
+exactly the requested output size, or with ``native`` only cropped to its shape. H3's
+soundtrack is dropped unless ``audio`` keeps it.
 """
 
 from __future__ import annotations
@@ -101,8 +101,8 @@ class H3VideoParams(BaseModel):
     """POST body for ``minimax-h3-turbo-video``."""
 
     model_config = ConfigDict(extra="forbid")
-    # added after 0.1.2; see jobs.queue.fingerprint
-    LATE_FIELDS: ClassVar[frozenset[str]] = frozenset({"native"})
+    # added after 0.1.2 (native) and 0.1.3 (audio); see jobs.queue.fingerprint
+    LATE_FIELDS: ClassVar[frozenset[str]] = frozenset({"native", "audio"})
 
     prompt: str = Field(min_length=1, max_length=4000)
     output: OutputSize
@@ -118,6 +118,11 @@ class H3VideoParams(BaseModel):
         default=False,
         description="return the clip at its generation size, only centre-cropped to the "
         "shape of output (1920x1080 at final: 1344x756), instead of scaled to output",
+    )
+    audio: bool = Field(
+        default=False,
+        description="keep H3's soundtrack (dialogue, sound effects, music) as AAC "
+        "instead of returning a silent clip",
     )
     start_image: ImageInput | None = None
     end_image: ImageInput | None = None
@@ -184,7 +189,8 @@ class H3VideoWorkflow(Workflow):
     id = "minimax-h3-turbo-video"
     description = (
         "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, "
-        "scaled to the requested size (or with native, cropped to its shape), no audio"
+        "scaled to the requested size (or with native, cropped to its shape), "
+        "silent unless audio"
     )
     output_media_type = "video/mp4"
     params_model = H3VideoParams
@@ -270,7 +276,12 @@ class H3VideoWorkflow(Workflow):
                     f"vpipe rendered {raw.frames} frames, expected {params['frames']}",
                     retryable=False,
                 )
-            self._render(job_id, params, raw, prepared.raw_output, final)
+            audio = params.get("audio", False)  # absent in jobs queued by an older server
+            if audio and not raw.has_audio:
+                raise WorkflowFailedError(
+                    "unexpected_output", "vpipe rendered no audio track", retryable=False
+                )
+            self._render(job_id, params, raw, prepared.raw_output, final, audio=audio)
             info = probe_video(final, self.media.ffprobe)
         except MediaError as exc:
             raise WorkflowFailedError("postprocess_failed", str(exc), retryable=True) from exc
@@ -300,9 +311,17 @@ class H3VideoWorkflow(Workflow):
         )
 
     def _render(
-        self, job_id: str, params: Mapping[str, Any], raw: VideoInfo, src: Path, dst: Path
+        self,
+        job_id: str,
+        params: Mapping[str, Any],
+        raw: VideoInfo,
+        src: Path,
+        dst: Path,
+        *,
+        audio: bool,
     ) -> None:
-        """Scale to ``output``; with ``native``, crop the generation size to its shape."""
+        """Scale to ``output``; with ``native``, crop the generation size to its shape.
+        With ``audio``, keep the soundtrack, exactly as long as the frames."""
         output = (params["output"]["width"], params["output"]["height"])
         native = params.get("native", False)  # absent in jobs queued by an older server
         size = native_size((raw.width, raw.height), output) if native else output
@@ -314,6 +333,7 @@ class H3VideoWorkflow(Workflow):
             height=size[1],
             fps=FPS,
             comment=f"vpipe-job:{job_id}",
+            audio_seconds=raw.frames / FPS if audio else None,
             ffmpeg=self.media.ffmpeg,
         )
 

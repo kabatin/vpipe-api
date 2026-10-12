@@ -51,6 +51,7 @@ _AS_LIMITED_BT709 = (
     "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 )
 _H264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p"]
+_AAC = ["-c:a", "aac", "-b:a", "192k"]
 
 
 class MediaError(RuntimeError):
@@ -165,9 +166,11 @@ def finalize_video(
     height: int,
     fps: int | Fraction,
     comment: str,
+    audio_seconds: float | None = None,
     ffmpeg: str = "ffmpeg",
 ) -> None:
-    """Scale (cover + centre crop, lanczos) to exactly ``width``x``height`` and drop audio.
+    """Scale (cover + centre crop, lanczos) to exactly ``width``x``height``; the audio is
+    dropped unless ``audio_seconds`` keeps it, that long (see ``_soundtrack``).
 
     Always re-encodes, even at the same size: the source is vpipe's lossless intermediate
     (FFV1, full-range BT.709 -- see ``h3_graph``), which players cannot open. That colour
@@ -182,7 +185,8 @@ def finalize_video(
         f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos"
         f"{_FROM_FULL_BT709},crop={width}:{height},{_AS_LIMITED_BT709}"
     )
-    _encode([*_vpipe_input(src, fps), "-an", "-vf", vf], dst, comment, ffmpeg)
+    sound = _soundtrack(audio_seconds)
+    _encode([*_vpipe_input(src, fps), *sound, "-vf", vf], dst, comment, ffmpeg)
 
 
 def finalize_cropped(
@@ -193,6 +197,7 @@ def finalize_cropped(
     height: int,
     fps: int | Fraction,
     comment: str,
+    audio_seconds: float | None = None,
     ffmpeg: str = "ffmpeg",
 ) -> None:
     """``finalize_video`` without the scaling: centre-crop to ``width``x``height`` (no
@@ -203,7 +208,8 @@ def finalize_cropped(
     """
     crop = f"crop={width}:{height}:exact=1"
     vf = f"{crop},scale=flags=lanczos{_FROM_FULL_BT709},{_AS_LIMITED_BT709}"
-    _encode([*_vpipe_input(src, fps), "-an", "-vf", vf], dst, comment, ffmpeg)
+    sound = _soundtrack(audio_seconds)
+    _encode([*_vpipe_input(src, fps), *sound, "-vf", vf], dst, comment, ffmpeg)
 
 
 def probe_source(path: Path, ffprobe: str = "ffprobe") -> SourceInfo:
@@ -336,6 +342,16 @@ def finalize_upscale(
     )
     args = [*_vpipe_input(src, rate), *sound, "-vf", vf, "-frames:v", str(frames)]
     _encode(args, dst, comment, ffmpeg, encode_timeout(frames, width, height))
+
+
+def _soundtrack(seconds: float | None) -> list[str]:
+    """No audio, or vpipe's as AAC exactly ``seconds`` long: it can end a few ms either side
+    of the last frame, so it is padded with silence, then cut (``-shortest`` would cut it
+    at the last whole AAC frame before, up to 32 ms short)."""
+    if seconds is None:
+        return ["-an"]
+    trim = f"apad,atrim=end={seconds:.6f}"  # atrim takes no fraction like 56/24
+    return ["-map", "0:v:0", "-map", "0:a:0", "-af", trim, *_AAC]
 
 
 def _vpipe_input(src: Path, rate: int | Fraction) -> list[str]:

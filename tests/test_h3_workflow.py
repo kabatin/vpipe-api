@@ -8,7 +8,13 @@ from PIL import Image
 from pydantic import ValidationError
 
 from tests.conftest import make_png, needs_ffmpeg
-from vpipe_api.workflows.base import InvalidParamsError, MediaTools, PreparedRun
+from vpipe_api.media import probe_video
+from vpipe_api.workflows.base import (
+    InvalidParamsError,
+    MediaTools,
+    PreparedRun,
+    WorkflowFailedError,
+)
 from vpipe_api.workflows.h3_graph import H3GraphInputs, H3GraphOptions, build_h3_spec
 from vpipe_api.workflows.h3_video import (
     MAX_IMAGE_BYTES,
@@ -45,6 +51,7 @@ def test_defaults_and_prompt_strip() -> None:
     p = params(prompt="  sunset  ")
     assert (p.prompt, p.frames, p.quality, p.steps, p.seed) == ("sunset", 124, "standard", 6, None)
     assert p.native is False
+    assert p.audio is False
 
 
 @pytest.mark.parametrize(
@@ -56,6 +63,7 @@ def test_defaults_and_prompt_strip() -> None:
         {"seed": -1},
         {"quality": "ultra"},
         {"native": "maybe"},
+        {"audio": "maybe"},
         {"extra": 1},
     ],
 )
@@ -146,6 +154,7 @@ def test_store_inputs_writes_png_and_seed(tmp_path: Path) -> None:
     assert stored["end_image"] is None
     assert isinstance(stored["seed"], int)
     assert stored["native"] is False
+    assert stored["audio"] is False
     assert (tmp_path / "job" / "inputs" / "start_image.png").read_bytes()[:4] == b"\x89PNG"
     assert "data" not in str(stored)
 
@@ -191,6 +200,7 @@ def test_graph_writes_a_lossless_intermediate(tmp_path: Path) -> None:
     rgb = stages["rgb-to-video"]["config"]
     assert (rgb["pix_fmt"], rgb["color_range"], rgb["colorspace"]) == ("yuv444p", "full", "bt709")
     assert stages["save-video"]["config"]["video_codec"] == "ffv1"
+    assert stages["save-video"]["config"]["audio_codec"] == "alac"
 
 
 def test_graph_text_only_leaves_anchor_ports_empty(tmp_path: Path) -> None:
@@ -243,15 +253,49 @@ def test_unknown_option_rejected() -> None:
 @needs_ffmpeg
 @pytest.mark.parametrize(("native", "expected"), [(None, (1280, 720)), (True, (832, 468))])
 def test_finalize_size(tmp_path: Path, native: bool | None, expected: tuple[int, int]) -> None:
-    raw = tmp_path / "raw.mkv"
-    clip = ["-f", "lavfi", "-i", "testsrc=s=832x480:r=24", "-frames:v", "56", "-c:v", "ffv1"]
-    subprocess.run(["ffmpeg", "-v", "error", *clip, "-pix_fmt", "yuv444p", str(raw)], check=True)
+    raw = _raw_clip(tmp_path, audio=False)
     wf = H3VideoWorkflow(MediaTools())
     stored = wf.store_inputs(params(output={"width": 1280, "height": 720}, frames=56), tmp_path)
-    if native is None:  # a job queued by 0.1.2, before "native" existed
-        stored = {k: v for k, v in stored.items() if k != "native"}
+    if native is None:  # a job queued by 0.1.2, before "native" and "audio" existed
+        stored = {k: v for k, v in stored.items() if k not in ("native", "audio")}
     else:
         stored = stored | {"native": native}
     out = wf.finalize("job_x", stored, tmp_path, PreparedRun(spec={}, raw_output=raw))
     assert (out.result["output"]["width"], out.result["output"]["height"]) == expected
     assert (out.result["details"]["generation"]["width"], out.file.exists()) == (832, True)
+
+
+def _raw_clip(tmp_path: Path, *, audio: bool) -> Path:
+    """vpipe's intermediate: FFV1 in Matroska, with H3's soundtrack when ``audio``."""
+    raw = tmp_path / "raw.mkv"
+    clip = ["-f", "lavfi", "-i", "testsrc=s=832x480:r=24"]
+    if audio:
+        clip += ["-f", "lavfi", "-i", "sine=sample_rate=32000", "-c:a", "aac", "-shortest"]
+    clip += ["-frames:v", "56", "-c:v", "ffv1", "-pix_fmt", "yuv444p"]
+    subprocess.run(["ffmpeg", "-v", "error", *clip, str(raw)], check=True)
+    return raw
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("audio", [False, True])
+def test_finalize_keeps_the_soundtrack_only_when_asked(
+    tmp_path: Path, native: bool, audio: bool
+) -> None:
+    raw = _raw_clip(tmp_path, audio=True)
+    wf = H3VideoWorkflow(MediaTools())
+    body = params(output={"width": 1280, "height": 720}, frames=56, native=native, audio=audio)
+    stored = wf.store_inputs(body, tmp_path)
+    out = wf.finalize("job_x", stored, tmp_path, PreparedRun(spec={}, raw_output=raw))
+    info = probe_video(out.file)
+    assert (info.frames, info.has_audio) == (56, audio)
+
+
+@needs_ffmpeg
+def test_finalize_refuses_a_clip_without_the_soundtrack_asked_for(tmp_path: Path) -> None:
+    raw = _raw_clip(tmp_path, audio=False)
+    wf = H3VideoWorkflow(MediaTools())
+    stored = wf.store_inputs(params(frames=56, audio=True), tmp_path)
+    with pytest.raises(WorkflowFailedError, match="no audio") as caught:
+        wf.finalize("job_x", stored, tmp_path, PreparedRun(spec={}, raw_output=raw))
+    assert (caught.value.code, caught.value.retryable) == ("unexpected_output", False)

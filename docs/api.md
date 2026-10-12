@@ -59,7 +59,7 @@ model-fetch`) is not counted.
   "workflows": [
     {
       "id": "minimax-h3-turbo-video",
-      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, scaled to the requested size (or with native, cropped to its shape), no audio",
+      "description": "MiniMax H3 (FL2VA, 8-bit) + Turbo LoRA: text or first/last-frame to video, scaled to the requested size (or with native, cropped to its shape), silent unless audio",
       "params_schema": { "...": "JSON Schema of the POST body" },
       "output_media_type": "video/mp4"
     }
@@ -140,13 +140,14 @@ POST body:
 
 | field | type | default | notes |
 |---|---|---|---|
-| `prompt` | string, 1–4000 chars | — | Describe the picture (audio is discarded). |
+| `prompt` | string, 1–4000 chars | — | Describe the picture, and the sound if you keep it with `audio`. |
 | `output` | `{width, height}` ints | — | Final size; 64–4096 each. Aspect must be within 16:9 … 9:16. The clip is generated smaller and scaled (cover + center crop, lanczos). With `native`, only its shape counts. |
 | `frames` | int | `124` | Must be `17n+5` in `56..243` (56 = 2.33 s … 243 = 10.125 s at 24 fps). Delivered as-is, never trimmed. |
 | `quality` | `"draft"` \| `"standard"` \| `"final"` | `"standard"` | Generation size tier (see table). |
 | `seed` | int ≥ 0 \| null | random | Echoed back as `result.seed_used`. Not a guarantee of the same clip (see below). |
 | `steps` | int 4–8 | `6` | Turbo LoRA denoise steps. |
 | `native` | bool | `false` | Return the clip at its generation size, only center-cropped to the shape of `output` (see below). |
+| `audio` | bool | `false` | Keep H3's soundtrack (dialogue, sound effects, music) as AAC instead of returning a silent clip (see below). |
 | `start_image` | image \| null | null | First frame anchor. |
 | `end_image` | image \| null | null | Last frame anchor. Requires `start_image`. |
 
@@ -176,8 +177,14 @@ that is 1344×756 at `final`, 1024×576 at `standard` and 832×468 at `draft`; f
 It is about the part of the frame the scaled output shows, and the encode below is otherwise the same.
 `result.output` gives the size of the returned file; `details.generation` still gives the size before the crop.
 
-Output: H.264 MP4 (yuv420p, limited-range BT.709), 24 fps, **no audio track**, metadata
+Output: H.264 MP4 (yuv420p, limited-range BT.709), 24 fps, **no audio track** unless `audio`, metadata
 `comment=vpipe-job:<job_id>`. vpipe writes a lossless FFV1 intermediate, so this encode is the only lossy step.
+
+H3 generates the picture and the sound together, from the same prompt, whether or not they are kept; `audio`
+costs no extra time. vpipe writes the soundtrack losslessly (ALAC) too; with `audio: true` it is encoded as
+AAC (192 kb/s), padded or cut to end exactly with the last frame. A clip that comes back from vpipe without one fails with `unexpected_output`. Spoken lines follow
+MiniMax's prompt guide: a speaker with a stable ID and a voice, the line in `<d>` with its language, e.g.
+`The young woman with a quiet, breathy voice (S1) says: <d>[English] I get off at the next station.</d>`
 
 Typical time on an M5 (10-core GPU, 32 GB), 6 steps: draft 124 frames ≈ 8 min, standard 124 frames ≈ 10.5 min,
 final 124 frames ≈ 22 min, standard 243 frames ≈ 24 min, final 243 frames ≈ 54 min. One job runs at a time.

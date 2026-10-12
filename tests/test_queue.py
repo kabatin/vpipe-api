@@ -331,6 +331,8 @@ def test_keys_made_by_0_1_2_still_match() -> None:
     assert fingerprint("minimax-h3-turbo-video", h3) == old_h3
     native = h3.model_copy(update={"native": True})
     assert fingerprint("minimax-h3-turbo-video", native) != old_h3
+    sound = h3.model_copy(update={"audio": True})
+    assert fingerprint("minimax-h3-turbo-video", sound) != old_h3
     video = {"data": base64.b64encode(b"take").decode(), "media_type": "video/mp4"}
     upscale = FlashVsrParams.model_validate({"source_video": video})
     old_upscale = "3effa67d1a7390de5efcee70b7ddf887a4fb8085f269ffc4e2830e51c567f89d"
