@@ -5,6 +5,15 @@
 - `minimax-h3-turbo-video` takes `audio: true`: the clip keeps H3's soundtrack (dialogue, sound effects,
   music), which the model generates with the picture anyway, as AAC ending with the last frame. Without it,
   the clip stays silent as before. A clip vpipe returns without a soundtrack fails with `unexpected_output`.
+- `coordinate_with`: other GPU servers on the Mac (ace-step-api, sfx-api, klein-api) whose `/v1/health`
+  the next job waits for. It starts only once every one reports `running` and `waiting` at 0 (and
+  `outside_runs`, when present), and not within `settle_seconds` (30) of seeing one busy. A server that
+  cannot be asked counts as idle; a running job is never stopped. While the head job waits, its job shows
+  `waiting_for` and `/v1/health` counts it in `waiting_for_peer` instead of `waiting`, so the other servers
+  go first rather than all waiting for each other. `doctor` asks each server; `config` lists them without
+  their tokens. Without `coordinate_with`, nothing changes.
+- A job whose record cannot be saved as it starts (a full disk) fails as `internal` (retryable) instead
+  of stopping the worker, which left `running: 1` and the queue stuck until a restart.
 
 ## 0.1.3 — 2026-10-09
 

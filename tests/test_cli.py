@@ -99,3 +99,37 @@ def test_serve_refuses_second_instance(
         assert "already" in capsys.readouterr().err
     finally:
         holder.release_instance_lock()
+
+
+PEERS = (
+    "[[coordinate_with]]\n"
+    'name = "ace-step-api"\n'
+    'health_url = "http://127.0.0.1:8768/v1/health"\n'
+    'token = "peer-token-0123456789"\n'
+)
+
+
+def test_config_shows_peers_without_their_tokens(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / "peers.toml"
+    cfg.write_text(PEERS)
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(cfg))
+    assert cli.main(["config"]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "[[coordinate_with]] name = ace-step-api, "
+        "health_url = http://127.0.0.1:8768/v1/health, token = ********"
+    ) in out
+    assert "settle_seconds = 30.0" in out and "peer-token-0123456789" not in out
+
+
+def test_serve_says_which_servers_it_waits_for(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = tmp_path / "peers.toml"
+    cfg.write_text(PEERS)
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(cfg))
+    monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
+    assert cli.main(["serve", "--port", "9999"]) == 0  # --port re-validates the settings
+    assert "waits for: ace-step-api" in capsys.readouterr().out

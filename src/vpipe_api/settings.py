@@ -1,7 +1,8 @@
 """Configuration: defaults < TOML file < ``VPIPE_API_*`` environment variables.
 
 The TOML file is ``$VPIPE_API_CONFIG`` or ``~/.config/vpipe-api/config.toml``. Per-workflow
-options live in ``[workflows."<workflow-id>"]`` tables and are validated by the workflow itself.
+options live in ``[workflows."<workflow-id>"]`` tables and are validated by the workflow itself;
+the other GPU servers to wait for live in ``[[coordinate_with]]`` tables (file only).
 """
 
 from __future__ import annotations
@@ -13,14 +14,24 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 ENV_PREFIX = "VPIPE_API_"
 DEFAULT_CONFIG_PATH = Path("~/.config/vpipe-api/config.toml")
 DEFAULT_DATA_DIR = Path("~/.local/share/vpipe-api")
 MIN_TOKEN_LENGTH = 32
 _TOKEN = re.compile(rf"[\x21-\x7e]{{{MIN_TOKEN_LENGTH},}}")
+_PRINTABLE = re.compile(r"[\x21-\x7e]+")  # printable ASCII, no spaces
 
 # Scalar settings that may come from the environment (field name -> env suffix).
 _ENV_FIELDS = (
@@ -37,11 +48,48 @@ _ENV_FIELDS = (
     "max_body_mb",
     "ffmpeg",
     "ffprobe",
+    "settle_seconds",
+    "coordination_poll_seconds",
 )
 
 
 class SettingsError(ValueError):
     """Raised when configuration is missing or invalid (message is user-facing)."""
+
+
+class PeerServer(BaseModel):
+    """Another GPU server on this Mac whose ``/v1/health`` must be idle before a job starts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")
+    health_url: str = Field(max_length=2048)
+    token: SecretStr | None = None
+
+    @field_validator("health_url")
+    @classmethod
+    def _url(cls, value: str) -> str:
+        if not _PRINTABLE.fullmatch(value):
+            raise ValueError("health_url must be printable ASCII without spaces")
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("health_url must be an http(s) URL with a host")
+        if parts.username or parts.password:
+            raise ValueError("health_url must not contain credentials (use token)")
+        if parts.query or parts.fragment:
+            raise ValueError("health_url must not have a query or fragment (use token)")
+        try:
+            parts.port  # noqa: B018 - raises ValueError for a port that is not a number
+        except ValueError:
+            raise ValueError("health_url has an invalid port") from None
+        return value
+
+    @field_validator("token")
+    @classmethod
+    def _token(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not _PRINTABLE.fullmatch(value.get_secret_value()):
+            raise ValueError("token must be printable ASCII without spaces")
+        return value
 
 
 class Settings(BaseModel):
@@ -62,6 +110,9 @@ class Settings(BaseModel):
     max_body_mb: int = Field(default=96, ge=1, le=1024)  # a 64 MB video is ~86 MB as base64
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
+    coordinate_with: tuple[PeerServer, ...] = ()
+    settle_seconds: float = Field(default=30.0, ge=0.0, le=600.0)
+    coordination_poll_seconds: float = Field(default=5.0, ge=0.05, le=300.0)
     workflows: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -76,6 +127,9 @@ class Settings(BaseModel):
                 f"host {self.host!r} is not a loopback address: set VPIPE_API_TOKEN "
                 "so the API is not exposed without authentication"
             )
+        names = [peer.name for peer in self.coordinate_with]
+        if len(set(names)) != len(names):
+            raise ValueError("coordinate_with names must be unique")
         return self
 
     @property
@@ -156,4 +210,5 @@ def load_settings(
             f"{'.'.join(str(p) for p in err['loc']) or 'settings'}: {err['msg']}"
             for err in exc.errors()
         )
-        raise SettingsError(f"invalid configuration: {problems}") from exc
+        # from None: pydantic's error holds the raw input, tokens included
+        raise SettingsError(f"invalid configuration: {problems}") from None

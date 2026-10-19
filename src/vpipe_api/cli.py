@@ -35,6 +35,7 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
     from vpipe_api.api.app import create_app
+    from vpipe_api.jobs.coordination import Coordinator
     from vpipe_api.jobs.queue import JobQueue
     from vpipe_api.jobs.store import JobStore, StoreLockedError
     from vpipe_api.runner import VpipeRunner
@@ -52,6 +53,11 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
         _err(f"error: {exc}")
         return 1
     registry = build_registry(settings)
+    coordinator = Coordinator(
+        settings.coordinate_with,
+        settle_seconds=settings.settle_seconds,
+        poll_seconds=settings.coordination_poll_seconds,
+    )
     queue = JobQueue(
         store,
         registry,
@@ -60,6 +66,7 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
         timeout_factor=settings.job_timeout_factor,
         retention_days=settings.retention_days,
         outside_runs=outside_runs,
+        coordinator=coordinator,
     )
     token = settings.token.get_secret_value() if settings.token else None
     app = create_app(
@@ -72,7 +79,8 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     _out(
         f"vpipe-api {__version__} on http://{settings.host}:{settings.port} "
         f"(auth: {'bearer' if token else 'none'}, workflows: "
-        f"{', '.join(w.id for w in registry)})"
+        f"{', '.join(w.id for w in registry)}, "
+        f"waits for: {', '.join(coordinator.names) or 'nothing'})"
     )
     try:
         uvicorn.run(app, host=settings.host, port=settings.port, workers=1, log_level="info")
@@ -110,9 +118,15 @@ def cmd_workflows(settings: Settings, _: argparse.Namespace) -> int:
 
 
 def cmd_config(settings: Settings, _: argparse.Namespace) -> int:
-    for key, value in settings.model_dump(exclude={"workflows"}).items():
+    for key, value in settings.model_dump(exclude={"workflows", "coordinate_with"}).items():
         shown = "********" if key == "token" and value is not None else value
         _out(f"{key} = {shown}")
+    for peer in settings.coordinate_with:
+        token = "********" if peer.token is not None else "none"
+        _out(
+            f"[[coordinate_with]] name = {peer.name}, health_url = {peer.health_url}, "
+            f"token = {token}"
+        )
     for workflow_id, options in settings.workflows.items():
         _out(f"[workflows.{workflow_id!r}] {options}")
     return 0

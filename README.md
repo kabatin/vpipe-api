@@ -165,6 +165,9 @@ restart ends as a retryable `server_restarted` failure (queued jobs carry on).
 | `job_timeout_factor` | `3.0` | a job is stopped after `estimate × factor + 5 min` |
 | `max_body_mb` | `96` | request size limit (a 64 MB video is ~86 MB as base64) |
 | `ffmpeg` / `ffprobe` | `ffmpeg` / `ffprobe` | binaries for post-processing, looked up on `PATH` |
+| `coordinate_with` | `[]` | `[[coordinate_with]]` tables: `name`, `health_url`, optional `token` (file only) |
+| `settle_seconds` | `30` | after a coordinated server was seen busy, a job starts no sooner than this |
+| `coordination_poll_seconds` | `5` | how often a busy server is asked again |
 
 Workflow options:
 
@@ -174,6 +177,24 @@ sol_attn = false          # exact attention instead of the fast approximation, f
 i8_gemm  = true           # M5+ matrix cores
 lora     = "larryvrh/MiniMax-H3-Turbo-Lora-v4-600-ema"
 ```
+
+Other GPU servers on the same Mac to wait for before each job (see
+[docs/api.md](docs/api.md#coordination-with-other-gpu-servers)):
+
+```toml
+[[coordinate_with]]
+name = "ace-step-api"
+health_url = "http://127.0.0.1:8768/v1/health"
+token = "…ace-step-api's bearer token…"
+
+[[coordinate_with]]
+name = "klein-api"
+health_url = "http://127.0.0.1:8767/v1/health"
+token = "…klein-api's bearer token…"
+```
+
+`doctor` asks each one and warns when it cannot be reached (it then counts as idle); `config` shows them
+with the token hidden.
 
 ### Serving on a LAN
 
@@ -212,6 +233,9 @@ Keep workflows closed: clients choose parameters, never file paths or stage grap
 
 - Running the `vpipe` command yourself on the same Mac (an experiment, `doctor --smoke`) shows up as
   `outside_runs` in `/v1/health`, and the next queued job waits until it ends.
+- Other GPU servers on the Mac (music, sound effects, images) are waited for when listed in `coordinate_with`:
+  the next job starts once they report idle. They wait for vpipe-api in turn, and while vpipe-api waits it
+  lets them go first, so a long queue of music jobs delays the next video until it has drained.
 - One heavy job at a time. Metal memory is wired; running other large GPU apps (renderers, local LLMs) during a
   generation slows both down or exhausts memory.
 - `final` × 243 frames is the heaviest job: on the 32 GB M5 free memory bottomed out at 18 % and swap grew from

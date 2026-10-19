@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from vpipe_api.jobs.coordination import PeerUnreachableError, probe_health
 from vpipe_api.runner import VpipeRunner
-from vpipe_api.settings import Settings
+from vpipe_api.settings import PeerServer, Settings
 from vpipe_api.workflows.base import Workflow, WorkflowFailedError, WorkflowRegistry
 
 MIN_FREE_GB = 20
@@ -144,6 +145,21 @@ def check_memory() -> Check:
     return Check("memory", level, f"{free}% free (other heavy GPU apps slow generation down)")
 
 
+def check_peer(peer: PeerServer) -> Check:
+    """A GPU server to wait for: reachable, and its current load (never fails the doctor: an
+    unreachable server just counts as idle)."""
+    name = f"coordinate with {peer.name}"
+    try:
+        health = probe_health(peer)
+    except PeerUnreachableError as exc:
+        return Check(name, Level.WARN, f"unreachable ({exc}): it counts as idle")
+    state = "idle" if health.idle else "busy"
+    load = f"running {health.running}, waiting {health.waiting}"
+    if health.outside_runs:
+        load += f", outside runs {health.outside_runs}"
+    return Check(name, Level.OK, f"{state} ({load})")
+
+
 def run_smoke(settings: Settings, workflow: Workflow) -> Check:
     """Run the workflow's cheapest job end-to-end, bypassing the HTTP server."""
     vpipe_bin, work_dir = settings.require_runtime()
@@ -200,6 +216,7 @@ def run_doctor(
         check_disk(settings.work_dir),
         check_power(),
         check_memory(),
+        *(check_peer(peer) for peer in settings.coordinate_with),
     ]
     for check in checks:
         if emit is not None:

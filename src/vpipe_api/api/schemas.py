@@ -21,6 +21,12 @@ class HealthResponse(BaseModel):
         description="vpipe command-line runs on this Mac that the server did not start (an "
         "experiment, doctor --smoke); queued jobs wait until there are none. null: unknown"
     )
+    waiting_for_peer: int = Field(
+        default=0,
+        description="queued jobs held back while another GPU server (coordinate_with) is busy. "
+        "They are not in `waiting`, so servers that wait for this one go first; the queue is "
+        "`waiting + waiting_for_peer`",
+    )
 
 
 class WorkflowInfo(BaseModel):
@@ -54,6 +60,11 @@ class JobResponse(BaseModel):
     status: JobStatus
     progress: float | None
     queue_position: int | None
+    waiting_for: str | None = Field(
+        default=None,
+        description="while queued first in line: the GPU server (coordinate_with) this job is "
+        "waiting for",
+    )
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -74,6 +85,7 @@ class JobResponse(BaseModel):
             status=record.status,
             progress=view.progress,
             queue_position=view.queue_position,
+            waiting_for=view.waiting_for,
             created_at=record.created_at,
             started_at=record.started_at,
             finished_at=record.finished_at,

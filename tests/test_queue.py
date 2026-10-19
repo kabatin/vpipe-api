@@ -118,7 +118,7 @@ def test_different_workflows_share_the_one_gpu_slot(tmp_path: Path, runner: Fake
         q.submit(gen, EchoParams(text="a"))
         runner.started.wait(2)
         second, _ = q.submit(upscale, EchoParams(text="b"))
-        assert q.counts() == (1, 1)  # never two runs at once, whatever the workflow
+        assert q.counts() == (1, 1, 0)  # never two runs at once, whatever the workflow
         assert q.view(second.id).record.status is JobStatus.QUEUED
         with pytest.raises(QueueFullError):
             q.submit(gen, EchoParams(text="c"))
@@ -241,7 +241,7 @@ def test_capacity_busy_and_positions(queue: JobQueue, runner: FakeRunner) -> Non
     first, _ = queue.submit(EchoWorkflow(), EchoParams(text="a"))
     runner.started.wait(2)
     second, _ = queue.submit(EchoWorkflow(), EchoParams(text="b"))
-    assert queue.counts() == (1, 1)
+    assert queue.counts() == (1, 1, 0)
     assert queue.view(second.id).queue_position == 1
     assert queue.view(first.id).progress == pytest.approx(0.945)
     with pytest.raises(QueueFullError) as busy:
@@ -254,7 +254,7 @@ def test_capacity_busy_and_positions(queue: JobQueue, runner: FakeRunner) -> Non
 def test_rejected_inputs_release_the_slot(queue: JobQueue, tmp_path: Path) -> None:
     with pytest.raises(InvalidParamsError):
         queue.submit(EchoWorkflow(), EchoParams(text="x", reject=True))
-    assert queue.counts() == (0, 0)
+    assert queue.counts() == (0, 0, 0)
     assert not any((tmp_path / "jobs").iterdir())
 
 
@@ -390,3 +390,40 @@ def test_redact_hides_home_directories() -> None:
     assert redact(f"cannot open {home}/work/x.mp4") == "cannot open ~/work/x.mp4"
     assert redact("see /Users/alice/a and /home/bob/b") == "see ~/a and ~/b"
     assert redact("no paths here") == "no paths here"
+
+
+def test_a_failed_save_as_a_job_starts_does_not_kill_the_worker(
+    tmp_path: Path, runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disk full as the job starts: without a guard the worker died with ``running: 1`` stuck in
+    /v1/health, and every GPU server that waits for this one waited forever."""
+    store = JobStore(tmp_path)
+    q = JobQueue(
+        store,
+        WorkflowRegistry([EchoWorkflow()]),
+        runner,
+        max_waiting=1,
+        timeout_factor=2,
+        retention_days=7,
+    )
+    real = store.save
+    failed: list[str] = []
+
+    def flaky(record: JobRecord) -> JobRecord:
+        if record.status is JobStatus.RUNNING and not failed:
+            failed.append(record.id)
+            raise OSError(28, "No space left on device")
+        return real(record)
+
+    monkeypatch.setattr(store, "save", flaky)
+    q.start()
+    try:
+        first, _ = q.submit(EchoWorkflow(), EchoParams(text="a"))
+        wait_for(lambda: status(q, first.id) is JobStatus.FAILED)
+        error = q.view(first.id).record.error
+        assert error is not None and error.code == "internal" and error.retryable
+        wait_for(lambda: q.counts() == (0, 0, 0))  # the slot is freed right after the save
+        second, _ = q.submit(EchoWorkflow(), EchoParams(text="b"))
+        wait_for(lambda: status(q, second.id) is JobStatus.SUCCEEDED)
+    finally:
+        q.stop(timeout_s=5)

@@ -57,6 +57,7 @@ def test_health_and_workflows(client: TestClient) -> None:
         "waiting": 0,
         "max_waiting": 1,
         "outside_runs": 0,
+        "waiting_for_peer": 0,
     }
     flows = {w["id"]: w for w in client.get("/v1/workflows").json()["workflows"]}
     assert set(flows) == {"echo", "minimax-h3-turbo-video"}

@@ -165,3 +165,27 @@ def test_smoke_reports_a_workflow_that_cannot_build_its_params(
     checks = by_name(run_doctor(settings, build_registry(settings), smoke=True))
     smoke = checks["smoke flashvsr-upscale"]
     assert smoke.level is Level.FAIL and "libx264" in smoke.detail
+
+
+def test_coordinate_with_peers_are_checked(
+    settings: Settings, healthy: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vpipe_api.jobs.coordination import PeerHealth
+    from vpipe_api.settings import PeerServer
+
+    gone = PeerServer(name="gone", health_url="http://127.0.0.1:1/v1/health")
+    checks = by_name(
+        run_doctor(
+            settings.model_copy(update={"coordinate_with": (gone,)}), build_registry(settings)
+        )
+    )
+    unreachable = checks["coordinate with gone"]
+    assert unreachable.level is Level.WARN and "counts as idle" in unreachable.detail
+
+    monkeypatch.setattr(doctor, "probe_health", lambda peer: PeerHealth(running=1, waiting=0))
+    busy = doctor.check_peer(gone)
+    assert busy.level is Level.OK and busy.detail == "busy (running 1, waiting 0)"
+    monkeypatch.setattr(
+        doctor, "probe_health", lambda peer: PeerHealth(running=0, waiting=0, outside_runs=1)
+    )
+    assert doctor.check_peer(gone).detail == "busy (running 0, waiting 0, outside runs 1)"

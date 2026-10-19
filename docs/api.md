@@ -41,10 +41,12 @@ Every non-2xx response uses the same shape:
 ### `GET /v1/health`
 
 ```json
-{ "status": "ok", "version": "0.1.3", "running": 1, "waiting": 0, "max_waiting": 1, "outside_runs": 0 }
+{ "status": "ok", "version": "0.1.3", "running": 1, "waiting": 0, "max_waiting": 1, "outside_runs": 0, "waiting_for_peer": 0 }
 ```
 
-`running` / `waiting` count this server's jobs. `outside_runs` counts `vpipe` command-line runs
+`running` / `waiting` count this server's jobs. `waiting_for_peer` counts queued jobs held back while
+another GPU server is busy (see [Coordination](#coordination-with-other-gpu-servers)); they are not in
+`waiting`, so **the queue is `waiting + waiting_for_peer`**. `outside_runs` counts `vpipe` command-line runs
 (`--launch`, `--launch-stage`) on the same Mac that the server did not start — an experiment,
 `vpipe-api doctor --smoke` — which share the GPU and memory; `null` if the process list could not be
 read. While it is above 0 the next queued job waits (it stays `queued`) and starts once they end. It
@@ -97,6 +99,7 @@ idempotency_conflict`; a concurrent request with the same key gets `409 idempote
   "status": "succeeded",
   "progress": 1.0,
   "queue_position": null,
+  "waiting_for": null,
   "created_at": "2026-09-30T12:00:00Z",
   "started_at": "2026-09-30T12:00:01Z",
   "finished_at": "2026-09-30T12:07:10Z",
@@ -114,6 +117,8 @@ idempotency_conflict`; a concurrent request with the same key gets `409 idempote
 - `status`: `queued` → `running` → `succeeded` | `failed` | `canceled`.
 - `progress`: `0.0..1.0` while running (denoise progress), `null` when unknown.
 - `queue_position`: 1-based position while `queued`, else `null`.
+- `waiting_for`: while `queued` first in line, the GPU server it is waiting for (e.g. `"ace-step-api"`),
+  else `null` (see [Coordination](#coordination-with-other-gpu-servers)).
 - `result` is non-null only when `succeeded`; `error` is non-null only when `failed`
   (`{code, message, retryable}`; e.g. `generation_failed`, `timeout`, `server_restarted`,
   `preprocess_failed` — the upload could not be read for an upscale, not retryable).
@@ -133,6 +138,37 @@ Outputs are kept for `retention_days` (default 7) and then deleted with the job 
 
 Cancels a queued or running job and returns the job object (`status: "canceled"`).
 `409 conflict` if the job already finished.
+
+## Coordination with other GPU servers
+
+The Mac has one GPU and one pool of unified memory. When `coordinate_with` is configured (a list of
+`{name, health_url, token}`; see the README), the job at the head of the queue starts only after a check
+in which **every** listed server's `/v1/health` reports `running == 0 && waiting == 0` (and
+`outside_runs == 0` when present). The server remembers when it last saw any listed server busy. If
+none was seen busy within the last `settle_seconds` (default 30), one all-idle check is enough;
+otherwise the job waits until `settle_seconds` after that sighting and checks again (clients often
+send a follow-up job right after one finishes). While waiting the job stays `queued` with
+`waiting_for` set. A server that cannot be reached, or does not answer like a health endpoint, counts
+as idle (logged as a warning). No redirect is followed and no proxy is used, so a token only ever goes
+to its own `health_url`. A running job is never paused.
+
+The vpipe runs outside the server (`outside_runs`) are waited for first, as before: while one goes on
+the head job is reported in `waiting`, and nobody is asked. One that begins while the job waits for
+another server sends it back to that wait.
+
+**Servers that wait for each other.** ace-step-api, sfx-api and klein-api wait for vpipe-api too. So
+that no pair waits forever, the side that is waiting yields: while vpipe-api's head job waits for
+another server, its own `/v1/health` reports the queue as `waiting_for_peer` and `waiting: 0`, so the
+other server sees it idle and goes first. A running job reports `running: 1`, which makes the others
+wait. So a server with a steady backlog goes on first: between two of its jobs its own queue is
+not empty, and vpipe-api's job starts once that queue has drained.
+
+**What it costs.** Each job start asks every listed server, one after another, at least once (twice
+after a recent busy sighting). A server that is down answers at once; one that hangs costs up to 5 s
+and then counts as idle. A job sent within `settle_seconds` of another server's last job waits out the
+rest of that window. If another server checks vpipe-api while vpipe-api's own final check is under way,
+both can start: the window is that check's length, short unless a listed server hangs. The settle
+rule and the independent poll times make it rare.
 
 ## Workflow `minimax-h3-turbo-video`
 

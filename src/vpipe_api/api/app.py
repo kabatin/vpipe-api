@@ -102,7 +102,7 @@ def build_router(queue: JobQueue, registry: WorkflowRegistry) -> APIRouter:
 
     @router.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        running, waiting = queue.counts()
+        running, waiting, waiting_for_peer = queue.counts()
         return HealthResponse(
             status="ok",
             version=__version__,
@@ -110,6 +110,7 @@ def build_router(queue: JobQueue, registry: WorkflowRegistry) -> APIRouter:
             waiting=waiting,
             max_waiting=queue.max_waiting,
             outside_runs=queue.outside_runs(),
+            waiting_for_peer=waiting_for_peer,
         )
 
     @router.get("/workflows", response_model=WorkflowsResponse)

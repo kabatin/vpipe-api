@@ -1,5 +1,10 @@
 """One GPU slot, FIFO. ``1 running + max_waiting queued``; beyond that submissions are refused
-with :class:`QueueFullError` so clients can back off instead of piling up hours of work."""
+with :class:`QueueFullError` so clients can back off instead of piling up hours of work.
+
+The job at the head of the queue starts only when no vpipe run outside the server is going on
+(:mod:`vpipe_api.outside`) and the other GPU servers on the Mac are idle
+(:mod:`vpipe_api.jobs.coordination`); while it waits for a server it stays ``queued`` with
+``waiting_for``."""
 
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
+from vpipe_api.jobs.coordination import Coordinator
 from vpipe_api.jobs.models import JobRecord, JobStatus
 from vpipe_api.jobs.store import JobStore
 from vpipe_api.runner import ProgressCallback, RunResult
@@ -30,6 +36,7 @@ RETRY_AFTER_MIN_S = 30
 RETRY_AFTER_MAX_S = 600
 CANCEL_WAIT_S = 45.0
 OUTSIDE_POLL_S = 5.0
+WORKER_BACKOFF_S = 1.0
 
 
 class Runner(Protocol):
@@ -78,6 +85,7 @@ class JobView:
     record: JobRecord
     progress: float | None
     queue_position: int | None
+    waiting_for: str | None = None
 
 
 @dataclass
@@ -127,11 +135,14 @@ class JobQueue:
         retention_days: int,
         outside_runs: Callable[[], int | None] = lambda: 0,
         outside_poll_s: float = OUTSIDE_POLL_S,
+        coordinator: Coordinator | None = None,
     ) -> None:
         self._store = store
         # vpipe runs this server did not start (see vpipe_api.outside): jobs wait for them
         self._outside_runs = outside_runs
         self._outside_poll_s = outside_poll_s
+        # the other GPU servers on the Mac (see vpipe_api.jobs.coordination)
+        self._coordinator = coordinator if coordinator is not None and coordinator.peers else None
         self._registry = registry
         self._runner = runner
         self._max_waiting = max_waiting
@@ -142,6 +153,8 @@ class JobQueue:
         self._reserved = 0
         self._running: _Running | None = None
         self._progress: dict[str, float] = {}
+        # head-of-queue job id -> the GPU server it is waiting for
+        self._waiting_for: dict[str, str] = {}
         # (workflow id, Idempotency-Key) -> job id, and keys whose submit is in flight
         self._keys: dict[tuple[str, str], str] = {}
         self._pending_keys: set[tuple[str, str]] = set()
@@ -187,9 +200,19 @@ class JobQueue:
             log.exception("checking for vpipe runs outside the server failed")
             return None
 
-    def counts(self) -> tuple[int, int]:
+    def counts(self) -> tuple[int, int, int]:
+        """``(running, waiting, waiting_for_peer)``. While the head job waits for another GPU
+        server, the whole queue is reported as ``waiting_for_peer``, not ``waiting``: servers
+        that wait for this one (ace-step-api, sfx-api, klein-api) then see it idle and go
+        first. Counting those jobs as ``waiting`` would deadlock two servers that each wait for
+        the other. Capacity (``429``) still counts every queued job."""
         with self._cond:
-            return (1 if self._running else 0), len(self._waiting)
+            running = 1 if self._running else 0
+            queued = len(self._waiting)
+            head = self._waiting[0] if self._waiting else None
+            if head is not None and head in self._waiting_for:
+                return running, 0, queued
+            return running, queued, 0
 
     def refusal(self, workflow_id: str, idempotency_key: str | None) -> int | None:
         """``Retry-After`` seconds if a new submit would be refused now, else ``None``.
@@ -280,9 +303,14 @@ class JobQueue:
         with self._cond:
             position = list(self._waiting).index(job_id) + 1 if job_id in self._waiting else None
             progress = self._progress.get(job_id)
+            waiting_for = self._waiting_for.get(job_id)
         if record.status is JobStatus.SUCCEEDED:
             progress = 1.0
-        return JobView(record=record, progress=progress, queue_position=position)
+        if record.status is not JobStatus.QUEUED:
+            waiting_for = None
+        return JobView(
+            record=record, progress=progress, queue_position=position, waiting_for=waiting_for
+        )
 
     def output_path(self, job_id: str) -> Path:
         record = self._store.get(job_id)
@@ -308,6 +336,7 @@ class JobQueue:
                 # record that is no longer QUEUED, so saving CANCELED is enough.
                 if job_id in self._waiting:
                     self._waiting.remove(job_id)
+                    self._cond.notify_all()  # a coordination wait for it ends now
                 canceled = self._store.save(record.canceled())
                 self._store.discard_inputs(job_id)
                 return canceled
@@ -331,6 +360,9 @@ class JobQueue:
         return int(min(max(left, RETRY_AFTER_MIN_S), RETRY_AFTER_MAX_S))
 
     def _next(self) -> str | None:
+        """Wait until the head job may start, then take it off the queue. It is held while a
+        vpipe run outside the server goes on, then while another GPU server is busy; a run
+        outside that began during the second wait sends it back to the first."""
         held = False
         while True:
             with self._cond:
@@ -340,6 +372,7 @@ class JobQueue:
                         self._store.prune(self._retention_days)
                 if self._stopping:
                     return None
+                head = self._waiting[0]
             outside = self.outside_runs()  # runs ps: not under the lock
             if outside:
                 if not held:
@@ -349,29 +382,95 @@ class JobQueue:
                     self._cond.wait_for(lambda: self._stopping, timeout=self._outside_poll_s)
                 continue
             if held:
-                log.info("no vpipe runs outside the server any more: starting the next job")
+                log.info("no vpipe runs outside the server any more")
                 held = False
+            if not self._coordinate(head):
+                continue  # canceled, no longer first, or stopping: look again
+            if self._coordinator is not None and self.outside_runs():
+                continue  # one began while it waited for the other servers: hold it again
             with self._cond:
                 if self._stopping:
                     return None
-                if self._waiting:  # a cancel may have emptied it meanwhile
+                if self._waiting and self._waiting[0] == head:  # a cancel may have taken it
                     return self._waiting.popleft()
 
+    def _coordinate(self, job_id: str) -> bool:
+        """True once the other GPU servers let ``job_id`` start; False if it should not be
+        started now (it was canceled or is no longer first, or the server is stopping)."""
+        if self._coordinator is None:
+            return True
+
+        def on_waiting(peer: str) -> None:
+            with self._cond:
+                if job_id not in self._waiting_for:
+                    log.info("job %s waits for %s to be idle", job_id, peer)
+                self._waiting_for[job_id] = peer
+
+        try:
+            return self._coordinator.wait_until_idle(
+                job_id, sleep=lambda seconds: self._pause(job_id, seconds), on_waiting=on_waiting
+            )
+        finally:
+            with self._cond:
+                self._waiting_for.pop(job_id, None)
+
+    def _pause(self, job_id: str, seconds: float) -> bool:
+        """Sleep while ``job_id`` stays first in line; False as soon as it is not (or the
+        server stops)."""
+        deadline = time.monotonic() + seconds
+        with self._cond:
+            while True:
+                if self._stopping or not self._waiting or self._waiting[0] != job_id:
+                    return False
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return True
+                self._cond.wait(timeout=left)
+
     def _loop(self) -> None:
+        """The worker. Nothing may end it but stop(): a dead worker would leave every later
+        job queued forever while the health check still looked fine."""
         while True:
-            job_id = self._next()
+            try:
+                job_id = self._next()
+            except Exception:
+                log.exception("worker: could not take the next job; trying again")
+                with self._cond:
+                    self._cond.wait_for(lambda: self._stopping, timeout=WORKER_BACKOFF_S)
+                continue
             if job_id is None:
                 return
+            try:
+                self._run_one(job_id)
+            except Exception:  # e.g. the disk filled up: fail the job, keep the worker
+                log.exception("worker: job %s could not be concluded", job_id)
+                self._fail_quietly(job_id)
+            finally:
+                with self._cond:
+                    self._running = None
+                    self._progress.pop(job_id, None)
+
+    def _run_one(self, job_id: str) -> None:
+        record = self._store.get(job_id)
+        if record is None or record.status is not JobStatus.QUEUED:
+            return
+        workflow = self._registry.get(record.workflow)
+        if workflow is None:
+            self._store.save(record.failed("unknown_workflow", record.workflow, retryable=False))
+            return
+        self._execute(workflow, record)
+
+    def _fail_quietly(self, job_id: str) -> None:
+        """Best effort after the worker hit an error outside a job's own handling: record the
+        job as failed so clients stop waiting for it."""
+        try:
             record = self._store.get(job_id)
-            if record is None or record.status is not JobStatus.QUEUED:
-                continue
-            workflow = self._registry.get(record.workflow)
-            if workflow is None:
-                self._store.save(
-                    record.failed("unknown_workflow", record.workflow, retryable=False)
-                )
-                continue
-            self._execute(workflow, record)
+            if record is not None and not record.status.finished:
+                message = "internal error (see the server log)"
+                self._store.save(record.failed("internal", message, retryable=True))
+            self._store.discard_inputs(job_id)
+        except Exception:
+            log.exception("worker: job %s could not be recorded as failed either", job_id)
 
     def _execute(self, workflow: Workflow, record: JobRecord) -> None:
         try:
