@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 — 2026-10-19
 
 - `minimax-h3-turbo-video` takes `audio: true`: the clip keeps H3's soundtrack (dialogue, sound effects,
   music), which the model generates with the picture anyway, as AAC ending with the last frame. Without it,
