@@ -325,3 +325,11 @@ def test_install_on_an_invalid_config_keeps_it_and_adds_the_paths(tmp_path: Path
     data = tomllib.loads(config.read_text())
     assert data["max_waiting"] == 1000 and data["vpipe_bin"] == "/elsewhere/build/apps/vpipe/vpipe"
     assert data["work_dir"] == str(tmp_path / "opt" / "work")
+
+
+def test_check_after_an_install_says_installed(tmp_path: Path, blank: Settings) -> None:
+    config = tmp_path / "c.toml"
+    assert run_setup(blank, config, opts(tmp_path, yes=True), deps(Recorder(), tmp_path))[0] == 0
+    settings = load_settings(env={}, config_path=config)
+    _, report = run_setup(settings, config, opts(tmp_path, check=True), deps(Recorder(), tmp_path))
+    assert {c["status"] for c in report["components"]} == {"installed"}
