@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `vpipe-api setup [--models h3,flashvsr] [--check] [--yes] [--json] [--lan] [--service] [--port N]
+  [--prefix DIR] [--label-suffix S] [--coordinate-with NAME=HEALTH_URL]`: one command for what took
+  `setup vpipe` + `setup models` + editing the config by hand, the same as the other AI servers.
+  `h3` builds vpipe (under `--prefix`, default `~/.local/opt/vpipe-api`) and prepares H3 Turbo; `flashvsr`
+  prepares FlashVSR. `--check` changes nothing and reports each component as `installed`, `missing` (with
+  its download size) or `unsupported` with the reason (not Apple Silicon, macOS older than 26, no Xcode /
+  cmake). It asks once before downloading (exit 3 without a terminal and without `--yes`) and stops before
+  anything when the disk cannot hold the peak (185 GB for H3). The config gets `vpipe_bin`,
+  `vpipe_src_dir` and `work_dir` (existing keys are kept); `--lan`, `--port`, `--coordinate-with` and
+  `--service` (a launchd agent, checked through `/v1/health`) are optional.
+- `setup vpipe` writes `vpipe_bin`, `vpipe_src_dir` and `work_dir` to the config instead of printing them.
+  `setup vpipe` and `setup models` otherwise work as before.
+
 ## 0.1.4 — 2026-10-19
 
 - `minimax-h3-turbo-video` takes `audio: true`: the clip keeps H3's soundtrack (dialogue, sound effects,

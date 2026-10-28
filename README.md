@@ -96,37 +96,42 @@ Request and details: [docs/api.md](docs/api.md#workflow-flashvsr-upscale).
 uv tool install git+https://github.com/kabatin/vpipe-api
 ```
 
-### 1. vpipe (skip if you already built it)
+### 1. vpipe and models in one go
 
 ```sh
-vpipe-api setup vpipe --dir ~/vpipe/src          # clone v0.1.80 + cmake build (~20 min)
+vpipe-api setup --check                  # changes nothing: what is installed, missing, unsupported
+vpipe-api setup --models h3              # build vpipe v0.1.80 (~20 min) + H3 Turbo (~118 GB, 185 GB peak)
+vpipe-api setup --models flashvsr        # optional: FlashVSR (~6.8 GB)
 ```
 
-It prints the two lines to put in `~/.config/vpipe-api/config.toml`:
+- Components: `h3` (vpipe + MiniMax H3 Turbo) and `flashvsr`; without `--models`, both.
+- vpipe goes under `--prefix` (default `~/.local/opt/vpipe-api/vpipe`, models in `…/work`). A vpipe already
+  in the config is used as is.
+- It asks once before downloading (`--yes` skips the question; without a terminal it stops with exit 3),
+  and stops first when the disk is too small for the peak.
+- It adds `vpipe_bin`, `vpipe_src_dir` and `work_dir` to `~/.config/vpipe-api/config.toml` (or
+  `$VPIPE_API_CONFIG`), keeping every key already there.
+- `--lan` listens on `0.0.0.0` with a token (`$VPIPE_API_TOKEN`, the config's, or a new one; never
+  printed), `--port N`, `--coordinate-with NAME=HEALTH_URL` (peer token from
+  `$VPIPE_API_COORD_TOKEN_<NAME>`), `--service` runs `serve` as a launchd agent
+  (`com.github.kabatin.vpipe-api`, log in `~/Library/Logs/vpipe-api.log`).
+- `--json` prints one JSON object on stdout (progress goes to stderr). Exit codes: 0 ok, 1 failed,
+  2 bad arguments, 3 needs confirmation.
 
-```toml
-vpipe_bin = "/Users/you/vpipe/src/build/apps/vpipe/vpipe"
-work_dir  = "/Users/you/vpipe/work"              # model registry + models live here
-```
-
-### 2. Models
-
-```sh
-vpipe-api setup models minimax-h3-turbo-video     # ~118 GB download, then 8-bit quantize
-vpipe-api setup models flashvsr-upscale           # optional: ~6.8 GB, used as published
-```
+Or step by step (the older form): `vpipe-api setup vpipe --dir ~/vpipe/src` (now also writes the config),
+then `vpipe-api setup models minimax-h3-turbo-video` / `flashvsr-upscale`.
 
 Downloads resume where they stopped. If the model directory stops growing for 10 minutes (e.g. after switching
 networks, when vpipe's connection stays bound to the old IP), the fetch is restarted automatically.
 
-### 3. Check and serve
+### 2. Check and serve
 
 ```sh
 vpipe-api doctor --smoke     # environment + one tiny real generation
 vpipe-api serve              # http://127.0.0.1:8765  (docs at /docs)
 ```
 
-### 4. First job
+### 3. First job
 
 ```sh
 API=http://127.0.0.1:8765        # with a token, add -H "Authorization: Bearer $TOKEN" to each curl

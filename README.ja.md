@@ -103,38 +103,38 @@ curl -s -X POST "$API/v1/workflows/flashvsr-upscale/jobs" -H 'Content-Type: appl
 uv tool install git+https://github.com/kabatin/vpipe-api
 ```
 
-### 1. vpipe（ビルド済みなら省略）
+### 1. vpipe とモデルをまとめて
 
 ```sh
-vpipe-api setup vpipe --dir ~/vpipe/src          # v0.1.80 を clone して cmake でビルド（約 20 分）
+vpipe-api setup --check                  # 何も変えない。入っているもの・足りないもの・使えない理由を出す
+vpipe-api setup --models h3              # vpipe v0.1.80 をビルド（約 20 分）+ H3 Turbo（約 118GB、作業中は最大 185GB）
+vpipe-api setup --models flashvsr        # 任意：FlashVSR（約 6.8GB）
 ```
 
-最後に、`~/.config/vpipe-api/config.toml` に書く 2 行が表示される：
+- 部品は `h3`（vpipe と MiniMax H3 Turbo）と `flashvsr`。`--models` を省くと両方
+- vpipe は `--prefix` の下に置く（既定 `~/.local/opt/vpipe-api/vpipe`、モデルは `…/work`）。設定に vpipe があればそれを使う
+- ダウンロードの前に 1 回だけ聞く（`--yes` で省く。端末がないと exit 3 で止まる）。容量が最大使用量に足りなければ先に止まる
+- `~/.config/vpipe-api/config.toml`（または `$VPIPE_API_CONFIG`）に `vpipe_bin`・`vpipe_src_dir`・`work_dir` を足す。既にある値は変えない
+- `--lan` は `0.0.0.0` で待ち受け、トークンを設定する（`$VPIPE_API_TOKEN`、設定にあるもの、なければ新しく作る。表示はしない）。
+  `--port N`、`--coordinate-with 名前=HEALTH_URL`（相手のトークンは `$VPIPE_API_COORD_TOKEN_<名前>`）、
+  `--service` は `serve` を launchd に常駐させる（`com.github.kabatin.vpipe-api`、ログは `~/Library/Logs/vpipe-api.log`）
+- `--json` は stdout に JSON を 1 つだけ出す（経過は stderr）。終了コードは 0 成功・1 失敗・2 引数の誤り・3 確認が要る
 
-```toml
-vpipe_bin = "/Users/you/vpipe/src/build/apps/vpipe/vpipe"
-work_dir  = "/Users/you/vpipe/work"              # モデルとその登録簿はここに置かれる
-```
-
-### 2. モデル
-
-```sh
-vpipe-api setup models minimax-h3-turbo-video     # 約 118GB を取得し、8bit に量子化する
-vpipe-api setup models flashvsr-upscale           # 任意：約 6.8GB、そのまま使う
-```
+1 段ずつ進める従来の形も使える：`vpipe-api setup vpipe --dir ~/vpipe/src`（設定にも書くようになった）、
+続けて `vpipe-api setup models minimax-h3-turbo-video` / `flashvsr-upscale`。
 
 - ダウンロードは、止まったところから再開できる
 - モデルのフォルダが 10 分増えないと、取得を自動で再起動する
 - 例：ネットワークを切り替えると、vpipe の通信が古い IP に張り付いたまま止まることがある。これも自動で立ち直る
 
-### 3. 点検と起動
+### 2. 点検と起動
 
 ```sh
 vpipe-api doctor --smoke     # 環境の点検と、ごく短い生成を 1 本
 vpipe-api serve              # http://127.0.0.1:8765（仕様は /docs）
 ```
 
-### 4. 最初のジョブ
+### 3. 最初のジョブ
 
 ```sh
 API=http://127.0.0.1:8765        # トークンを設定したら、各 curl に -H "Authorization: Bearer $TOKEN" を足す
