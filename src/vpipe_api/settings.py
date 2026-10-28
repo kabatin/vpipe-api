@@ -117,7 +117,7 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
-        if self.token is not None and not _TOKEN.fullmatch(self.token.get_secret_value()):
+        if self.token is not None and not is_valid_token(self.token.get_secret_value()):
             raise ValueError(
                 f"token must be at least {MIN_TOKEN_LENGTH} printable ASCII characters without "
                 "spaces (e.g. `openssl rand -hex 32`)"
@@ -151,11 +151,15 @@ class Settings(BaseModel):
         env = ", ".join(ENV_PREFIX + name.upper() for name in missing)
         raise SettingsError(
             f"missing setting(s): {', '.join(missing)} — set {env} or add them to the "
-            "config file (see `vpipe-api setup vpipe`)"
+            "config file (or run `vpipe-api setup`)"
         )
 
     def workflow_options(self, workflow_id: str) -> Mapping[str, Any]:
         return self.workflows.get(workflow_id, {})
+
+
+def is_valid_token(value: str) -> bool:
+    return _TOKEN.fullmatch(value) is not None
 
 
 def is_loopback(host: str) -> bool:
@@ -200,6 +204,11 @@ def load_settings(
         if raw is not None and raw.strip() != "":
             data[field] = raw
 
+    return validate_settings_data(data)
+
+
+def validate_settings_data(data: Mapping[str, Any]) -> Settings:
+    """Validate merged file/environment values; errors never repeat the input (tokens)."""
     data = {key: _expand(value) for key, value in data.items()}
     if "data_dir" not in data:
         data["data_dir"] = str(DEFAULT_DATA_DIR.expanduser())
