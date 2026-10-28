@@ -164,3 +164,14 @@ def test_write_reads_the_file_back_before_replacing(tmp_path: Path) -> None:
     assert path.read_text() == "a = 1\n" and list(tmp_path.iterdir()) == [path]
     write_atomic(path, "a = 2\n", expected={"a": 2})
     assert path.read_text() == "a = 2\n"
+
+
+def test_a_symlinked_config_is_written_through_the_link(tmp_path: Path) -> None:
+    real = tmp_path / "dotfiles" / "vpipe.toml"
+    real.parent.mkdir()
+    real.write_text("retention_days = 3\n")
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+    update_config(link, add={"work_dir": "/w"}, env={})
+    assert link.is_symlink()
+    assert tomllib.loads(real.read_text()) == {"retention_days": 3, "work_dir": "/w"}

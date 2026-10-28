@@ -23,6 +23,7 @@ from vpipe_api.settings import (
     is_valid_token,
     validate_settings_data,
 )
+from vpipe_api.setup import fs
 from vpipe_api.setup.toml_emit import dumps
 from vpipe_api.setup.vpipe_build import SetupError
 
@@ -116,21 +117,13 @@ def merge_config(
 
 
 def write_atomic(path: Path, text: str, *, expected: Mapping[str, Any]) -> None:
-    """Write via a temp file in the same folder, read it back as TOML, then rename."""
-    if not path.parent.is_dir():
-        path.parent.mkdir(parents=True, mode=0o700)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        tmp.chmod(0o600)  # the umask may have narrowed os.open's mode, never widened it
+    """Atomic 0600 write that reads the temp file back as TOML before the rename."""
+
+    def check(tmp: Path) -> None:
         if tomllib.loads(tmp.read_text(encoding="utf-8")) != expected:
             raise SetupError(f"{tmp} did not read back as written; {path} left unchanged")
-        tmp.replace(path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+
+    fs.write_atomic(path, text.encode("utf-8"), check=check)
 
 
 def update_config(
