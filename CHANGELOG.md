@@ -1,7 +1,6 @@
 # Changelog
 
-## Unreleased
-
+## 0.1.5 — 2026-10-28
 - `vpipe-api setup [--models h3,flashvsr] [--check] [--yes] [--json] [--lan] [--service] [--port N]
   [--prefix DIR] [--label-suffix S] [--coordinate-with NAME=HEALTH_URL]`: one command for what took
   `setup vpipe` + `setup models` + editing the config by hand, the same as the other AI servers.
