@@ -12,6 +12,7 @@ from vpipe_api.setup.pins import VPIPE_REPO as DEFAULT_REPO
 from vpipe_api.setup.pins import VPIPE_TAG as DEFAULT_TAG
 
 Run = Callable[[Sequence[str]], int]
+STDERR_FD = 2
 Emit = Callable[[str], None]
 
 
@@ -20,7 +21,8 @@ class SetupError(RuntimeError):
 
 
 def _default_run(cmd: Sequence[str]) -> int:
-    return subprocess.run(list(cmd), check=False).returncode
+    # git/cmake chatter goes to stderr: stdout is kept for `setup --json`'s one line
+    return subprocess.run(list(cmd), stdout=STDERR_FD, check=False).returncode
 
 
 def _quiet_ok(cmd: Sequence[str]) -> bool:

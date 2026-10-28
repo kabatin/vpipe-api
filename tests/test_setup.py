@@ -250,3 +250,14 @@ def test_resolved_src_dir(tmp_path: Path) -> None:
     )
     assert s.resolved_vpipe_src_dir == Path("/x/vpipe")
     assert threading.active_count() >= 1
+
+
+def test_build_tool_output_goes_to_stderr(capfd: pytest.CaptureFixture[str]) -> None:
+    """Under ``setup --json`` stdout must hold the JSON line only."""
+    import sys
+
+    from vpipe_api.setup.vpipe_build import _default_run
+
+    assert _default_run([sys.executable, "-c", "print('from git')"]) == 0
+    out, err = capfd.readouterr()
+    assert out == "" and "from git" in err
