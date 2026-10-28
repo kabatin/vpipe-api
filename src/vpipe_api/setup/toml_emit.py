@@ -1,6 +1,6 @@
 """A TOML writer for the subset our config files use (the stdlib only reads TOML).
 
-Tables, arrays of tables, and str / int / float / bool / list[str] values. Anything else
+Tables, arrays of tables, and str / int / float / bool / list[str] / list[int] values. Anything else
 raises ``TypeError`` rather than writing a file ``tomllib`` would read differently.
 """
 
@@ -39,6 +39,10 @@ def _key(key: str) -> str:
     return key if _BARE_KEY.fullmatch(key) else _string(key)
 
 
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _value(value: Any) -> str:
     if isinstance(value, bool):  # before int: bool is an int
         return "true" if value else "false"
@@ -52,6 +56,8 @@ def _value(value: Any) -> str:
         return _string(value)
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return "[" + ", ".join(_string(item) for item in value) + "]"
+    if isinstance(value, list) and all(_is_int(item) for item in value):
+        return "[" + ", ".join(str(item) for item in value) + "]"
     raise TypeError(f"cannot write {type(value).__name__} to TOML")
 
 

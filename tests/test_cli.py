@@ -237,3 +237,19 @@ def test_setup_label_suffix_with_port_is_accepted(
 ) -> None:
     monkeypatch.setattr(setup_cli, "default_deps", lambda: _fake_deps(tmp_path))
     assert cli.main(["setup", "--check", "--label-suffix", "verify-1", "--port", "9000"]) == 0
+
+
+def test_setup_config_it_cannot_write_is_json_exit_1(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from vpipe_api.setup import config_write
+
+    def refuse(_data):
+        raise TypeError("cannot write datetime to TOML")
+
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(tmp_path / "c.toml"))
+    monkeypatch.setattr(config_write, "dumps", refuse)
+    monkeypatch.setattr(setup_cli, "default_deps", lambda: _fake_deps(tmp_path))
+    assert cli.main(["setup", "--json", "--port", "9000"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is False and "cannot write" in report["error"]

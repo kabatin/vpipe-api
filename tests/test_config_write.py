@@ -10,6 +10,7 @@ from vpipe_api.setup.config_write import (
     coord_token_env,
     merge_config,
     update_config,
+    write_atomic,
 )
 from vpipe_api.setup.toml_emit import dumps
 from vpipe_api.setup.vpipe_build import SetupError
@@ -25,6 +26,7 @@ def test_toml_round_trip() -> None:
         "on": True,
         "off": False,
         "names": ["a", "b c", "ü"],
+        "sizes": [1, -2, 30],
         "empty": [],
         "control": "a\x01b\x7f",
         "workflows": {
@@ -40,7 +42,7 @@ def test_toml_round_trip() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", [float("nan"), float("inf"), None, [1, 2], {"a": [{"b": {"c": 1}}]}]
+    "value", [float("nan"), float("inf"), None, [1, "a"], [True], {"a": [{"b": {"c": 1}}]}]
 )
 def test_toml_refuses_what_it_cannot_write(value: object) -> None:
     with pytest.raises(TypeError):
@@ -143,3 +145,22 @@ def test_update_refuses_an_invalid_result_and_leaves_the_file(tmp_path: Path) ->
     path.write_text("not [toml")
     with pytest.raises(SetupError, match="cannot read"):
         update_config(path, add={}, env={})
+
+
+def test_a_value_toml_cannot_hold_is_a_setup_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    original = '[workflows."minimax-h3-turbo-video"]\nwhen = 2026-01-01\n'
+    path.write_text(original)
+    with pytest.raises(SetupError, match="cannot write"):
+        update_config(path, add={"work_dir": "/w"}, env={})
+    assert path.read_text() == original
+
+
+def test_write_reads_the_file_back_before_replacing(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("a = 1\n")
+    with pytest.raises(SetupError, match="read back"):
+        write_atomic(path, "a = 3\n", expected={"a": 2})
+    assert path.read_text() == "a = 1\n" and list(tmp_path.iterdir()) == [path]
+    write_atomic(path, "a = 2\n", expected={"a": 2})
+    assert path.read_text() == "a = 2\n"

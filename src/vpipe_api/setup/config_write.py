@@ -115,7 +115,8 @@ def merge_config(
     return merged
 
 
-def write_atomic(path: Path, text: str) -> None:
+def write_atomic(path: Path, text: str, *, expected: Mapping[str, Any]) -> None:
+    """Write via a temp file in the same folder, read it back as TOML, then rename."""
     if not path.parent.is_dir():
         path.parent.mkdir(parents=True, mode=0o700)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
@@ -124,6 +125,8 @@ def write_atomic(path: Path, text: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         tmp.chmod(0o600)  # the umask may have narrowed os.open's mode, never widened it
+        if tomllib.loads(tmp.read_text(encoding="utf-8")) != expected:
+            raise SetupError(f"{tmp} did not read back as written; {path} left unchanged")
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -143,14 +146,17 @@ def update_config(
     merged = merge_config(
         existing, add=add, lan=lan, port=port, coordinate_with=coordinate_with, env=env
     )
-    text = dumps(merged)
+    try:
+        text = dumps(merged)
+    except TypeError as exc:
+        raise SetupError(f"cannot write {path} back: {exc}") from None
     try:
         settings = validate_settings_data(tomllib.loads(text))
     except SettingsError as exc:
         raise SetupError(f"the config setup would write is not valid: {exc}") from None
     changed = merged != existing
     if changed:
-        write_atomic(path, text)
+        write_atomic(path, text, expected=merged)
     return ConfigResult(
         path=path,
         changed=changed,
