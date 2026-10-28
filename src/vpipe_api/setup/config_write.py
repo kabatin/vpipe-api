@@ -1,8 +1,9 @@
 """Merge what ``setup`` learned into the config file ``settings.py`` reads.
 
-Every existing key and value is kept; only missing keys are added (``--lan`` and ``--port``
-set ``host`` / ``port`` because they were asked for). The file is written atomically, mode
-0600, and only when something changed. The token is never printed or returned.
+Every existing key and value is kept; only missing keys are added (``--lan``, ``--port`` and
+``--coordinate-with`` change ``host`` / ``token``, ``port`` and that peer because they were
+asked for). The file is written atomically, mode 0600, and only when something changed.
+The token is never printed or returned.
 """
 
 from __future__ import annotations
@@ -75,17 +76,19 @@ def _lan_token(existing: Mapping[str, Any], env: Mapping[str, str]) -> str:
 def _peers(
     existing: Sequence[Mapping[str, Any]], wanted: Sequence[Peer], env: Mapping[str, str]
 ) -> list[dict[str, Any]]:
+    """One entry per name: a peer given again gets its new URL, and the token from the
+    environment when one is set (otherwise it keeps the token it had)."""
     merged = [dict(peer) for peer in existing]
-    names = {peer.get("name") for peer in merged}
     for peer in wanted:
-        if peer.name in names:
-            continue
-        entry: dict[str, Any] = {"name": peer.name, "health_url": peer.health_url}
         token = env.get(coord_token_env(peer.name), "").strip()
+        update: dict[str, Any] = {"name": peer.name, "health_url": peer.health_url}
         if token:
-            entry["token"] = token
-        merged.append(entry)
-        names.add(peer.name)
+            update["token"] = token
+        index = next((i for i, p in enumerate(merged) if p.get("name") == peer.name), None)
+        if index is None:
+            merged.append(update)
+        else:
+            merged[index] = merged[index] | update
     return merged
 
 

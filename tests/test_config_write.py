@@ -67,22 +67,46 @@ def test_lan_token_order_env_then_existing_then_generated() -> None:
 
 
 def test_coordinate_with_dedupes_by_name_and_reads_peer_tokens() -> None:
-    existing = {"coordinate_with": [{"name": "ace-step-api", "health_url": "http://a/v1/health"}]}
     merged = merge_config(
-        existing,
+        {},
         add={},
         coordinate_with=(
-            Peer("ace-step-api", "http://other/v1/health"),
-            Peer("sfx-api", "http://127.0.0.1:8769/v1/health"),
             Peer("sfx-api", "http://dup/v1/health"),
+            Peer("sfx-api", "http://127.0.0.1:8769/v1/health"),  # the last one given wins
         ),
         env={coord_token_env("sfx-api"): "peer-token"},
     )
     assert merged["coordinate_with"] == [
-        {"name": "ace-step-api", "health_url": "http://a/v1/health"},
         {"name": "sfx-api", "health_url": "http://127.0.0.1:8769/v1/health", "token": "peer-token"},
     ]
     assert coord_token_env("klein.api-2") == "VPIPE_API_COORD_TOKEN_KLEIN_API_2"
+
+
+def test_coordinate_with_updates_a_peer_of_the_same_name() -> None:
+    existing = {
+        "coordinate_with": [
+            {"name": "ace-step-api", "health_url": "http://old/v1/health", "token": "old-token"},
+            {"name": "sfx-api", "health_url": "http://s/v1/health", "token": "keep-me"},
+        ]
+    }
+    merged = merge_config(
+        existing,
+        add={},
+        coordinate_with=(
+            Peer("ace-step-api", "http://127.0.0.1:8768/v1/health"),
+            Peer("sfx-api", "http://127.0.0.1:8769/v1/health"),
+        ),
+        env={coord_token_env("ace-step-api"): "new-token"},
+    )
+    assert merged["coordinate_with"] == [
+        {
+            "name": "ace-step-api",
+            "health_url": "http://127.0.0.1:8768/v1/health",
+            "token": "new-token",
+        },
+        {"name": "sfx-api", "health_url": "http://127.0.0.1:8769/v1/health", "token": "keep-me"},
+    ]
+    assert existing["coordinate_with"][0]["token"] == "old-token"  # not mutated
 
 
 def test_update_writes_atomically_0600_and_only_on_change(tmp_path: Path) -> None:
