@@ -323,7 +323,9 @@ def run_setup(
         )
 
     ordered = [results[c] for c in opts.components]
-    ok = all(r.status in (Status.INSTALLED, Status.ALREADY) for r in ordered)
+    # Without --models, a component this Mac cannot run is reported, not a failure
+    fine = {Status.INSTALLED, Status.ALREADY} | (set() if opts.explicit else {Status.UNSUPPORTED})
+    ok = all(r.status in fine for r in ordered)
     ok = ok and (not opts.service or bool(service.healthy)) and code == EXIT_OK
     if code == EXIT_OK and not ok:
         code = EXIT_FAILED

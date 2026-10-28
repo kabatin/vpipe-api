@@ -258,16 +258,16 @@ def test_failures_are_reported_per_component(tmp_path: Path, blank: Settings) ->
     assert (tmp_path / "c.toml").exists()  # vpipe was built: its paths are kept
 
 
-def test_unsupported_install_fails_without_work(tmp_path: Path, blank: Settings) -> None:
+def test_unsupported_fails_only_when_asked_for_by_name(tmp_path: Path, blank: Settings) -> None:
     rec = Recorder()
     old = Machine(arm64=True, macos="15.7", ram_gb=16, free_bytes=10**12, tools={})
-    code, report = run_setup(
-        blank,
-        tmp_path / "c.toml",
-        opts(tmp_path, yes=True),
-        deps(rec, tmp_path, machine=lambda _: old),
-    )
-    assert code == 1 and rec.calls == [] and not report["ok"]
+    d = deps(rec, tmp_path, machine=lambda _: old)
+    code, report = run_setup(blank, tmp_path / "c.toml", opts(tmp_path, yes=True), d)
+    assert code == 0 and report["ok"] and rec.calls == []  # every component: report, carry on
+    assert {c["status"] for c in report["components"]} == {"unsupported"}
+    named = opts(tmp_path, components=("flashvsr",), explicit=True, yes=True)
+    code, report = run_setup(blank, tmp_path / "c.toml", named, d)
+    assert code == 1 and not report["ok"]
 
 
 def test_lan_port_peers_and_service(tmp_path: Path, settings: Settings) -> None:
