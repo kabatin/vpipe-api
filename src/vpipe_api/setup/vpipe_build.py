@@ -7,10 +7,9 @@ import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-DEFAULT_REPO = "https://github.com/tgo-app-dev/vpipe.git"
-DEFAULT_TAG = "v0.1.80"
-# Tags can be moved; the tags we test against are pinned to their commit.
-KNOWN_COMMITS = {"v0.1.80": "a90cf05abb92863213adf7259a5f936266c92af2"}
+from vpipe_api.setup.pins import VPIPE_KNOWN_COMMITS as KNOWN_COMMITS
+from vpipe_api.setup.pins import VPIPE_REPO as DEFAULT_REPO
+from vpipe_api.setup.pins import VPIPE_TAG as DEFAULT_TAG
 
 Run = Callable[[Sequence[str]], int]
 Emit = Callable[[str], None]
