@@ -118,7 +118,9 @@ vpipe-api setup --models flashvsr        # 任意：FlashVSR（約 6.8GB）
 - `--lan` は `0.0.0.0` で待ち受け、トークンを設定する（`$VPIPE_API_TOKEN`、設定にあるもの、なければ新しく作る。表示はしない）。
   `--port N`、`--coordinate-with 名前=HEALTH_URL`（相手のトークンは `$VPIPE_API_COORD_TOKEN_<名前>`）、
   `--service` は `serve` を launchd に常駐させる（`com.github.kabatin.vpipe-api`、ログは `~/Library/Logs/vpipe-api.log`）
-- `--json` は stdout に JSON を 1 つだけ出す（経過は stderr）。終了コードは 0 成功・1 失敗・2 引数の誤り・3 確認が要る
+- `--json` は stdout に JSON を 1 つだけ出す（経過は stderr。引数の誤りでも同じ）。終了コードは 0 成功・1 失敗・2 引数の誤り・3 確認が要る。
+  `--models` を省くと、この Mac で動かない部品は `unsupported` と報告するだけで失敗にしない。`--models` で名指ししたときは失敗にする
+- `--label-suffix S`（英数字と `-`）は、既存の常駐と並べてもう 1 つ入れる。`--port` も要る
 
 1 段ずつ進める従来の形も使える：`vpipe-api setup vpipe --dir ~/vpipe/src`（設定にも書くようになった）、
 続けて `vpipe-api setup models minimax-h3-turbo-video` / `flashvsr-upscale`。

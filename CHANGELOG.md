@@ -12,6 +12,8 @@
   anything when the disk cannot hold the peak (185 GB for H3). The config gets `vpipe_bin`,
   `vpipe_src_dir` and `work_dir` (existing keys are kept); `--lan`, `--port`, `--coordinate-with` and
   `--service` (a launchd agent, checked through `/v1/health`) are optional.
+- `setup` runs on an invalid config (it warns and keeps every key), updates a `--coordinate-with` peer
+  already in the config, and waits for launchd to unload the old agent before loading the new one.
 - `setup vpipe` writes `vpipe_bin`, `vpipe_src_dir` and `work_dir` to the config instead of printing them.
   `setup vpipe` and `setup models` otherwise work as before.
 

@@ -115,8 +115,10 @@ vpipe-api setup --models flashvsr        # optional: FlashVSR (~6.8 GB)
   printed), `--port N`, `--coordinate-with NAME=HEALTH_URL` (peer token from
   `$VPIPE_API_COORD_TOKEN_<NAME>`), `--service` runs `serve` as a launchd agent
   (`com.github.kabatin.vpipe-api`, log in `~/Library/Logs/vpipe-api.log`).
-- `--json` prints one JSON object on stdout (progress goes to stderr). Exit codes: 0 ok, 1 failed,
-  2 bad arguments, 3 needs confirmation.
+- `--json` prints one JSON object on stdout (progress goes to stderr), also for a bad argument. Exit
+  codes: 0 ok, 1 failed, 2 bad arguments, 3 needs confirmation. Without `--models`, a component this Mac
+  cannot run is reported as `unsupported` and is not a failure; named in `--models`, it is.
+- `--label-suffix S` (letters, digits, `-`) installs a second agent beside the first; it needs `--port`.
 
 Or step by step (the older form): `vpipe-api setup vpipe --dir ~/vpipe/src` (now also writes the config),
 then `vpipe-api setup models minimax-h3-turbo-video` / `flashvsr-upscale`.
