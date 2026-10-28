@@ -206,6 +206,7 @@ def test_setup_usage_errors_are_json_exit_2(
     assert out.count("\n") == 1
     report = json.loads(out)
     assert set(report) == SETUP_KEYS and report["ok"] is False and report["error"]
+    assert "/" not in report["service"]["label"]  # a refused suffix is not echoed as the label
 
 
 def test_setup_rejects_bad_tokens_before_doing_anything(

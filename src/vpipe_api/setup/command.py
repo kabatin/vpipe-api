@@ -232,7 +232,13 @@ def error_payload(
         "lan": False,
         "tokenSet": False,
         "configPath": str(config_path),
-        "service": {"installed": False, "label": service_label(label_suffix), "healthy": None},
+        "service": {
+            "installed": False,
+            "label": service_label(
+                label_suffix if label_suffix and LABEL_SUFFIX.fullmatch(label_suffix) else None
+            ),
+            "healthy": None,
+        },
         "machine": None,
         "components": [],
         "error": error,
