@@ -3,32 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from vpipe_api import __version__
+from vpipe_api import __version__, setup_cli
 from vpipe_api.doctor import Check, Level, run_doctor
 from vpipe_api.outside import outside_runs
-from vpipe_api.settings import (
-    DEFAULT_CONFIG_PATH,
-    Settings,
-    SettingsError,
-    load_settings,
-    resolve_config_path,
-)
-from vpipe_api.setup.command import (
-    EXIT_BAD_ARGS,
-    SetupDeps,
-    SetupOptions,
-    parse_components,
-    parse_peer,
-    run_setup,
-)
-from vpipe_api.setup.components import DEFAULT_PREFIX
+from vpipe_api.settings import Settings, SettingsError, load_settings, resolve_config_path
 from vpipe_api.setup.config_write import update_config
 from vpipe_api.setup.vpipe_build import DEFAULT_TAG, SetupError, build_vpipe
 from vpipe_api.workflows import build_registry
@@ -189,85 +172,17 @@ def cmd_setup_models(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _ask(question: str) -> bool:
-    _err(f"{question} [y/N] ")
-    return sys.stdin.readline().strip().lower() in ("y", "yes")
+class UsageError(Exception):
+    """argparse refused the arguments (raised instead of exiting, so --json can answer)."""
 
 
-def _default_deps() -> SetupDeps:
-    from vpipe_api.setup.machine import inspect_machine
-    from vpipe_api.setup.models import ModelPreparer
-
-    return SetupDeps(
-        machine=inspect_machine,
-        build=lambda src, emit: build_vpipe(src, emit=emit),
-        preparer=lambda settings, emit: ModelPreparer(settings, emit=emit),
-        home=Path.home(),
-        confirm=_ask if sys.stdin.isatty() else None,
-        env=os.environ,
-    )
-
-
-def _print_report(report: dict) -> None:
-    _out(
-        f"vpipe-api {report['version']} setup ({report['action']}): "
-        f"{'ok' if report['ok'] else 'not done'}"
-    )
-    for comp in report["components"]:
-        size = f" [{comp['downloadBytes'] / 1e9:.0f} GB]" if comp["downloadBytes"] else ""
-        _out(f"  {comp['id']:<9} {comp['status']:<12} {comp['message']}{size}")
-        if "fix" in comp:
-            fix = comp["fix"]
-            _out(
-                f"            fix: {fix['hint']}"
-                + (f" — {fix['command']}" if fix["command"] else "")
-            )
-    service = report["service"]
-    _out(
-        f"  config    {report['configPath']}  url {report['url']}  token "
-        f"{'set' if report['tokenSet'] else 'none'}"
-    )
-    _out(
-        f"  service   {service['label']}: "
-        f"{'installed' if service['installed'] else 'not installed'}"
-        + ("" if service["healthy"] is None else f", healthy: {service['healthy']}")
-    )
-
-
-def cmd_setup(settings: Settings, args: argparse.Namespace) -> int:
-    try:
-        opts = SetupOptions(
-            components=parse_components(args.models),
-            check=args.check,
-            yes=args.yes,
-            lan=args.lan,
-            service=args.service,
-            port=args.port,
-            prefix=Path(args.prefix),
-            label_suffix=args.label_suffix,
-            coordinate_with=tuple(parse_peer(p) for p in args.coordinate_with),
-        )
-    except ValueError as exc:
-        _err(f"error: {exc}")
-        return EXIT_BAD_ARGS
-    config_path = resolve_config_path(config_path=Path(args.config) if args.config else None)
-    code, report = run_setup(
-        settings,
-        config_path,
-        opts,
-        _default_deps(),
-        custom_config=config_path != DEFAULT_CONFIG_PATH.expanduser(),
-        emit=_err,
-    )
-    if args.json:
-        _out(json.dumps(report))
-    else:
-        _print_report(report)
-    return code
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str):  # type: ignore[override]
+        raise UsageError(f"{self.prog}: {message}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vpipe-api", description=__doc__)
+    parser = _Parser(prog="vpipe-api", description=__doc__)
     parser.add_argument("--version", action="version", version=f"vpipe-api {__version__}")
     parser.add_argument("--config", help="config file (default ~/.config/vpipe-api/config.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -287,23 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("config", help="show the effective configuration").set_defaults(func=cmd_config)
 
     setup = sub.add_parser("setup", help="install vpipe and models, write the config")
-    setup.add_argument("--models", help="comma list of components: h3, flashvsr (default: all)")
-    setup.add_argument("--check", action="store_true", help="change nothing, report state")
-    setup.add_argument("--yes", action="store_true", help="do not ask before downloading")
-    setup.add_argument("--json", action="store_true", help="one JSON object on stdout")
-    setup.add_argument("--lan", action="store_true", help="listen on 0.0.0.0 with a token")
-    setup.add_argument("--service", action="store_true", help="run serve as a launchd agent")
-    setup.add_argument("--port", type=int)
-    setup.add_argument("--prefix", default=str(DEFAULT_PREFIX), help="where vpipe/work go")
-    setup.add_argument("--label-suffix", help="launchd label suffix (beside another install)")
-    setup.add_argument(
-        "--coordinate-with",
-        action="append",
-        default=[],
-        metavar="NAME=HEALTH_URL",
-        help="another GPU server to wait for (repeatable)",
-    )
-    setup.set_defaults(func=cmd_setup)
+    setup_cli.add_arguments(setup)
     setup_sub = setup.add_subparsers(dest="target")
     vpipe = setup_sub.add_parser("vpipe", help="(older form) clone and build vpipe")
     vpipe.add_argument("--dir", required=True, help="where to clone vpipe")
@@ -318,19 +217,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except UsageError as exc:
+        return setup_cli.usage_error(argv, str(exc))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
+        if args.command == "setup" and args.target is None:
+            return setup_cli.run(args)  # reads the config itself, and answers in JSON
         settings = load_settings(config_path=Path(args.config) if args.config else None)
         return int(args.func(settings, args))
     except (SettingsError, SetupError) as exc:
         _err(f"error: {exc}")
-        if getattr(args, "json", False):
-            _out(
-                json.dumps(
-                    {"server": "vpipe-api", "version": __version__, "ok": False, "error": str(exc)}
-                )
-            )
         return 1
     except KeyboardInterrupt:
         return 130

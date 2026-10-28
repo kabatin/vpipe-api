@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import install_models
-from vpipe_api import cli, doctor
+from vpipe_api import cli, doctor, setup_cli
 from vpipe_api.jobs.store import JobStore
 from vpipe_api.setup.command import SetupDeps
 from vpipe_api.setup.machine import Machine
@@ -94,7 +94,7 @@ def test_setup_check_json_is_the_last_stdout_line(
     config = tmp_path / "keep.toml"
     config.write_text("retention_days = 3\n")
     monkeypatch.setenv("VPIPE_API_CONFIG", str(config))
-    monkeypatch.setattr(cli, "_default_deps", lambda: _fake_deps(tmp_path))
+    monkeypatch.setattr(setup_cli, "default_deps", lambda: _fake_deps(tmp_path))
     assert cli.main(["setup", "--check", "--json"]) == 0
     out = capsys.readouterr().out
     assert out.count("\n") == 1
@@ -189,3 +189,51 @@ def test_serve_says_which_servers_it_waits_for(
     monkeypatch.setattr("uvicorn.run", lambda app, **kwargs: None)
     assert cli.main(["serve", "--port", "9999"]) == 0  # --port re-validates the settings
     assert "waits for: ace-step-api" in capsys.readouterr().out
+
+
+SETUP_KEYS = {
+    "server", "version", "ok", "action", "url", "lan", "tokenSet", "configPath",
+    "service", "machine", "components", "error",
+}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--label-suffix", "../x", "--port", "9000"],
+        ["--label-suffix", "a" * 33, "--port", "9000"],
+        ["--label-suffix", "test"],  # beside production it needs its own port
+        ["--port", "nope"],
+        ["--bogus"],
+        ["--models", "wan"],
+    ],
+)
+def test_setup_usage_errors_are_json_exit_2(
+    env: Path, argv: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["setup", "--json", *argv]) == 2
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1
+    report = json.loads(out)
+    assert set(report) == SETUP_KEYS and report["ok"] is False and report["error"]
+
+
+def test_setup_rejects_bad_tokens_before_doing_anything(
+    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(setup_cli, "default_deps", lambda: pytest.fail("must not get this far"))
+    monkeypatch.setenv("VPIPE_API_TOKEN", "too short")
+    assert cli.main(["setup", "--lan", "--yes"]) == 2
+    assert "too short" not in capsys.readouterr().err
+    monkeypatch.setenv("VPIPE_API_TOKEN", "test-token-0123456789-abcdefghijklmnop")
+    monkeypatch.setenv("VPIPE_API_COORD_TOKEN_SFX_API", "has a space")
+    url = "sfx-api=http://127.0.0.1:8769/v1/health"
+    assert cli.main(["setup", "--coordinate-with", url]) == 2
+    assert "has a space" not in capsys.readouterr().err
+
+
+def test_setup_label_suffix_with_port_is_accepted(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(setup_cli, "default_deps", lambda: _fake_deps(tmp_path))
+    assert cli.main(["setup", "--check", "--label-suffix", "verify-1", "--port", "9000"]) == 0

@@ -7,6 +7,7 @@ the config file gets the keys they need, and ``--service`` loads the launchd age
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -15,9 +16,10 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from vpipe_api import __version__
-from vpipe_api.settings import PeerServer, Settings, is_loopback, load_settings
+from vpipe_api.settings import PeerServer, Settings, is_loopback, is_valid_token, load_settings
 from vpipe_api.setup.components import (
     COMPONENTS,
+    DEFAULT_PREFIX,
     Fix,
     Layout,
     Report,
@@ -25,16 +27,17 @@ from vpipe_api.setup.components import (
     inspect_component,
     vpipe_cost,
 )
-from vpipe_api.setup.config_write import Peer, update_config
+from vpipe_api.setup.config_write import TOKEN_ENV, Peer, coord_token_env, update_config
 from vpipe_api.setup.machine import Machine
 from vpipe_api.setup.pins import DISK_MARGIN_BYTES
-from vpipe_api.setup.service import ServiceState, install_service, service_state
+from vpipe_api.setup.service import ServiceState, install_service, service_label, service_state
 from vpipe_api.setup.vpipe_build import SetupError
 from vpipe_api.workflows import build_registry
 from vpipe_api.workflows.base import Workflow
 
 Emit = Callable[[str], None]
 EXIT_OK, EXIT_FAILED, EXIT_BAD_ARGS, EXIT_CONFIRM = 0, 1, 2, 3
+LABEL_SUFFIX = re.compile(r"[A-Za-z0-9-]{1,32}")
 
 
 class Preparer(Protocol):
@@ -44,12 +47,13 @@ class Preparer(Protocol):
 @dataclass(frozen=True)
 class SetupOptions:
     components: tuple[str, ...] = tuple(COMPONENTS)
+    explicit: bool = False  # --models named them: unsupported is then a failure
     check: bool = False
     yes: bool = False
     lan: bool = False
     service: bool = False
     port: int | None = None
-    prefix: Path = Path("~/.local/opt/vpipe-api")
+    prefix: Path = DEFAULT_PREFIX
     label_suffix: str | None = None
     coordinate_with: tuple[Peer, ...] = ()
 
@@ -81,16 +85,61 @@ def parse_components(text: str | None) -> tuple[str, ...]:
     return wanted
 
 
-def parse_peer(text: str) -> Peer:
+def parse_peer(text: str, env: Mapping[str, str] | None = None) -> Peer:
+    """``NAME=HEALTH_URL``, checked with the same rules as the config, including the peer's
+    token from the environment (which never appears in the error)."""
     name, sep, url = text.partition("=")
     if not sep:
         raise ValueError(f"--coordinate-with wants NAME=HEALTH_URL, got {text!r}")
+    token = (env or {}).get(coord_token_env(name), "").strip() or None
     try:
-        peer = PeerServer(name=name, health_url=url)
+        peer = PeerServer(name=name, health_url=url, token=token)  # pyright: ignore[reportArgumentType]
     except ValidationError as exc:
-        problems = "; ".join(err["msg"] for err in exc.errors())
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
+        )
         raise ValueError(f"--coordinate-with {name}: {problems}") from None
     return Peer(peer.name, peer.health_url)
+
+
+def build_options(
+    *,
+    models: str | None,
+    check: bool = False,
+    yes: bool = False,
+    lan: bool = False,
+    service: bool = False,
+    port: int | None = None,
+    prefix: Path = DEFAULT_PREFIX,
+    label_suffix: str | None = None,
+    coordinate_with: Sequence[str] = (),
+    env: Mapping[str, str],
+) -> SetupOptions:
+    """Every argument checked before anything runs: a ValueError here is exit 2."""
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"--port must be 1-65535, got {port}")
+    if label_suffix is not None:
+        if not LABEL_SUFFIX.fullmatch(label_suffix):
+            raise ValueError("--label-suffix must be 1-32 letters, digits or '-'")
+        if port is None:
+            raise ValueError("--label-suffix needs --port (the other install keeps its port)")
+    token = env.get(TOKEN_ENV, "").strip()
+    if lan and token and not is_valid_token(token):
+        raise ValueError(
+            f"{TOKEN_ENV} must be at least 32 printable ASCII characters without spaces"
+        )
+    return SetupOptions(
+        components=parse_components(models),
+        explicit=models is not None,
+        check=check,
+        yes=yes,
+        lan=lan,
+        service=service,
+        port=port,
+        prefix=prefix,
+        label_suffix=label_suffix,
+        coordinate_with=tuple(parse_peer(text, env) for text in coordinate_with),
+    )
 
 
 def _gb(n: int) -> str:
@@ -119,6 +168,26 @@ def _payload(
         "service": service.to_json(),
         "machine": machine.to_json(),
         "components": [report.to_json() for report in reports],
+    }
+
+
+def error_payload(
+    error: str, *, action: str, config_path: Path, label_suffix: str | None = None
+) -> dict[str, Any]:
+    """The report's shape when setup could not get as far as looking at the machine."""
+    return {
+        "server": "vpipe-api",
+        "version": __version__,
+        "ok": False,
+        "action": action,
+        "url": None,
+        "lan": False,
+        "tokenSet": False,
+        "configPath": str(config_path),
+        "service": {"installed": False, "label": service_label(label_suffix), "healthy": None},
+        "machine": None,
+        "components": [],
+        "error": error,
     }
 
 
