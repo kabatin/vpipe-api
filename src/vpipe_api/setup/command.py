@@ -16,7 +16,15 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from vpipe_api import __version__
-from vpipe_api.settings import PeerServer, Settings, is_loopback, is_valid_token, load_settings
+from vpipe_api.settings import (
+    PeerServer,
+    Settings,
+    SettingsError,
+    is_loopback,
+    is_valid_token,
+    load_settings,
+    validate_settings_data,
+)
 from vpipe_api.setup.components import (
     COMPONENTS,
     DEFAULT_PREFIX,
@@ -27,7 +35,13 @@ from vpipe_api.setup.components import (
     inspect_component,
     vpipe_cost,
 )
-from vpipe_api.setup.config_write import TOKEN_ENV, Peer, coord_token_env, update_config
+from vpipe_api.setup.config_write import (
+    TOKEN_ENV,
+    Peer,
+    coord_token_env,
+    read_config,
+    update_config,
+)
 from vpipe_api.setup.machine import Machine
 from vpipe_api.setup.pins import DISK_MARGIN_BYTES
 from vpipe_api.setup.service import ServiceState, install_service, service_label, service_state
@@ -71,6 +85,40 @@ class SetupDeps:
     env: Mapping[str, str] = field(default_factory=dict)
     install_service: Callable[..., ServiceState] = install_service
     service_state: Callable[..., ServiceState] = service_state
+
+
+# Tried in turn when the config is invalid: setup still finds vpipe and the work folder
+_FALLBACK_KEYS = (
+    ("vpipe_bin", "vpipe_src_dir", "work_dir", "data_dir", "host", "port", "token"),
+    ("vpipe_bin", "vpipe_src_dir", "work_dir", "data_dir"),
+    (),
+)
+
+
+def load_lenient(config_path: Path, env: Mapping[str, str]) -> tuple[Settings, str | None]:
+    """The settings, or, when the config (or the environment) is invalid, the parts of the
+    file setup needs plus what is wrong. Setup must still run on a broken config: --check
+    to report it, an install to add what is missing (it never removes what is there)."""
+    try:
+        settings = load_settings(env=env, config_path=config_path)
+        build_registry(settings)  # the workflows validate their own options
+        return settings, None
+    except SettingsError as exc:
+        problem = str(exc)
+    except ValidationError as exc:
+        problem = "workflow options: " + "; ".join(
+            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
+        )
+    try:
+        raw = read_config(config_path)
+    except SetupError:
+        raw = {}
+    for keys in _FALLBACK_KEYS:
+        try:
+            return validate_settings_data({k: raw[k] for k in keys if k in raw}), problem
+        except SettingsError:
+            continue
+    raise AssertionError("unreachable: the defaults are valid")  # pragma: no cover
 
 
 def parse_components(text: str | None) -> tuple[str, ...]:
@@ -309,7 +357,7 @@ def run_setup(
             env=deps.env,
         )
         emit(f"config {'updated' if written.changed else 'unchanged'}: {config_path}")
-        final = load_settings(env=deps.env, config_path=config_path)
+        final, _ = load_lenient(config_path, deps.env)
 
     service = state(final)
     if opts.service and code != EXIT_CONFIRM:

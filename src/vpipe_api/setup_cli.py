@@ -16,7 +16,6 @@ from pathlib import Path
 from vpipe_api.settings import (
     DEFAULT_CONFIG_PATH,
     SettingsError,
-    load_settings,
     resolve_config_path,
 )
 from vpipe_api.setup.command import (
@@ -25,6 +24,7 @@ from vpipe_api.setup.command import (
     SetupDeps,
     build_options,
     error_payload,
+    load_lenient,
     run_setup,
 )
 from vpipe_api.setup.components import DEFAULT_PREFIX
@@ -159,7 +159,9 @@ def run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         return fail(EXIT_BAD_ARGS, str(exc))
     try:
-        settings = load_settings(config_path=config_path)
+        settings, problem = load_lenient(config_path, os.environ)
+        if problem:
+            _err(f"warning: config {config_path} is not valid ({problem}); going on without it")
         code, report = run_setup(
             settings,
             config_path,

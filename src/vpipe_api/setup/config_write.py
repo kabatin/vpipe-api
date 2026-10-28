@@ -153,14 +153,24 @@ def update_config(
     try:
         settings = validate_settings_data(tomllib.loads(text))
     except SettingsError as exc:
-        raise SetupError(f"the config setup would write is not valid: {exc}") from None
+        if _is_valid(existing):
+            raise SetupError(f"the config setup would write is not valid: {exc}") from None
+        settings = None  # it was invalid before; setup only added to it
     changed = merged != existing
     if changed:
         write_atomic(path, text, expected=merged)
     return ConfigResult(
         path=path,
         changed=changed,
-        host=settings.host,
-        port=settings.port,
-        token_set=settings.token is not None,
+        host=settings.host if settings else str(merged.get("host", "127.0.0.1")),
+        port=settings.port if settings else int(merged.get("port", 8765)),
+        token_set=settings.token is not None if settings else "token" in merged,
     )
+
+
+def _is_valid(data: Mapping[str, Any]) -> bool:
+    try:
+        validate_settings_data(data)
+    except SettingsError:
+        return False
+    return True

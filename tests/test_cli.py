@@ -114,16 +114,6 @@ def test_setup_bad_args_exit_2(env: Path, capsys: pytest.CaptureFixture[str]) ->
     assert cli.main(["setup", "--coordinate-with", "nope"]) == 2
 
 
-def test_setup_json_error_is_still_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    bad = tmp_path / "bad.toml"
-    bad.write_text("not [toml")
-    monkeypatch.setenv("VPIPE_API_CONFIG", str(bad))
-    assert cli.main(["setup", "--check", "--json"]) == 1
-    assert json.loads(capsys.readouterr().out)["ok"] is False
-
-
 def test_settings_errors_exit_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -253,3 +243,30 @@ def test_setup_config_it_cannot_write_is_json_exit_1(
     assert cli.main(["setup", "--json", "--port", "9000"]) == 1
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is False and "cannot write" in report["error"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "max_waiting = 1000\n",  # out of range
+        'nonsense = "x"\n',  # unknown key
+        '[workflows."minimax-h3-turbo-video"]\nbogus = 1\n',  # the workflow refuses it
+        "not [toml",  # not TOML at all
+    ],
+)
+def test_setup_check_runs_on_an_invalid_config(
+    env: Path,
+    tmp_path: Path,
+    bad: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = tmp_path / "bad.toml"
+    config.write_text(bad)
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(config))
+    monkeypatch.setattr(setup_cli, "default_deps", lambda: _fake_deps(tmp_path))
+    assert cli.main(["setup", "--check", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["action"] == "check"
+    assert "config" in captured.err and "test-token" not in captured.err
+    assert config.read_text() == bad

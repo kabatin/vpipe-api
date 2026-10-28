@@ -306,3 +306,22 @@ def test_unhealthy_service_fails(tmp_path: Path, settings: Settings) -> None:
         settings, tmp_path / "c.toml", opts(tmp_path, service=True), deps(rec, tmp_path)
     )
     assert code == 1 and not report["ok"]
+
+
+def test_install_on_an_invalid_config_keeps_it_and_adds_the_paths(tmp_path: Path) -> None:
+    from vpipe_api.setup.command import load_lenient
+
+    config = tmp_path / "c.toml"
+    config.write_text('max_waiting = 1000\nvpipe_bin = "/elsewhere/build/apps/vpipe/vpipe"\n')
+    settings, problem = load_lenient(config, env={})
+    assert problem is not None and "max_waiting" in problem
+    assert settings.vpipe_bin == Path("/elsewhere/build/apps/vpipe/vpipe")  # still found
+    rec = Recorder()
+    settings = settings.model_copy(update={"vpipe_bin": None, "vpipe_src_dir": None})
+    code, report = run_setup(
+        settings, config, opts(tmp_path, components=("h3",), yes=True), deps(rec, tmp_path)
+    )
+    assert code == 0, report
+    data = tomllib.loads(config.read_text())
+    assert data["max_waiting"] == 1000 and data["vpipe_bin"] == "/elsewhere/build/apps/vpipe/vpipe"
+    assert data["work_dir"] == str(tmp_path / "opt" / "work")
