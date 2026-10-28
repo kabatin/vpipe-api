@@ -1,3 +1,5 @@
+import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -5,6 +7,8 @@ import pytest
 from tests.conftest import install_models
 from vpipe_api import cli, doctor
 from vpipe_api.jobs.store import JobStore
+from vpipe_api.setup.command import SetupDeps
+from vpipe_api.setup.machine import Machine
 
 
 @pytest.fixture
@@ -58,14 +62,66 @@ def test_setup_models_asks_first(env: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert cli.main(["setup", "models", "minimax-h3-turbo-video"]) == 1
 
 
-def test_setup_vpipe_prints_config(
+def test_setup_vpipe_writes_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("VPIPE_API_CONFIG", str(tmp_path / "none.toml"))
+    config = tmp_path / "cfg.toml"
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(config))
     monkeypatch.setattr(cli, "build_vpipe", lambda src, **_: src / "build/apps/vpipe/vpipe")
     assert cli.main(["setup", "vpipe", "--dir", str(tmp_path / "v")]) == 0
+    assert "config updated" in capsys.readouterr().out and (tmp_path / "work").is_dir()
+    data = tomllib.loads(config.read_text())
+    assert data["vpipe_bin"] == str(tmp_path / "v/build/apps/vpipe/vpipe")
+    assert data["work_dir"] == str(tmp_path / "work")
+
+
+def _fake_deps(tmp_path: Path) -> SetupDeps:
+    def no_work(*_args, **_kwargs):
+        raise AssertionError("--check must not build, prepare or load anything")
+
+    return SetupDeps(
+        machine=lambda _: Machine(False, "15.7.4", 16, 10**9, {"git": True}),
+        build=no_work,
+        preparer=no_work,
+        home=tmp_path / "home",
+        install_service=no_work,
+    )
+
+
+def test_setup_check_json_is_the_last_stdout_line(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "keep.toml"
+    config.write_text("retention_days = 3\n")
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(config))
+    monkeypatch.setattr(cli, "_default_deps", lambda: _fake_deps(tmp_path))
+    assert cli.main(["setup", "--check", "--json"]) == 0
     out = capsys.readouterr().out
-    assert 'vpipe_bin = "' in out and (tmp_path / "work").is_dir()
+    assert out.count("\n") == 1
+    report = json.loads(out)
+    assert report["action"] == "check" and report["configPath"] == str(config)
+    assert [c["status"] for c in report["components"]] == ["unsupported", "unsupported"]
+    assert "test-token" not in out and report["tokenSet"] is True
+    assert config.read_text() == "retention_days = 3\n"
+    assert cli.main(["setup", "--check", "--models", "flashvsr"]) == 0
+    text = capsys.readouterr().out
+    assert "flashvsr  unsupported" in text and "h3" not in text.split("\n", 1)[1]
+
+
+def test_setup_bad_args_exit_2(env: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["setup", "--models", "h3,wan"]) == 2
+    assert "valid: h3, flashvsr" in capsys.readouterr().err
+    assert cli.main(["setup", "--coordinate-with", "nope"]) == 2
+
+
+def test_setup_json_error_is_still_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad = tmp_path / "bad.toml"
+    bad.write_text("not [toml")
+    monkeypatch.setenv("VPIPE_API_CONFIG", str(bad))
+    assert cli.main(["setup", "--check", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
 
 
 def test_settings_errors_exit_1(
