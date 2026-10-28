@@ -47,7 +47,7 @@ def test_service_writes_plist_reloads_and_waits_for_health(tmp_path: Path) -> No
     assert plist["EnvironmentVariables"]["VPIPE_API_CONFIG"] == str(tmp_path / "c.toml")
     assert "t" * 40 not in str(plist)  # the token stays in the config file
     assert calls[0][:2] == ["launchctl", "bootout"] and calls[0][2].endswith(f"/{label}")
-    assert calls[1][:2] == ["launchctl", "bootstrap"]
+    assert calls[-1][:2] == ["launchctl", "bootstrap"]
     assert seen[0] == ("http://127.0.0.1:8765/v1/health", "t" * 40)
 
 
@@ -100,3 +100,52 @@ def test_machine_reasons() -> None:
     assert Machine(True, "26.0", 32, 1, {}).build_unsupported() == (
         "building vpipe needs xcode, cmake, git"
     )
+
+
+def _scripted(tmp_path: Path, answers: dict[str, list[int]], **kw):
+    """launchctl whose exit codes per subcommand come from ``answers`` (last one repeats)."""
+    calls: list[str] = []
+
+    def run(cmd):
+        calls.append(cmd[1])
+        codes = answers[cmd[1]]
+        return codes.pop(0) if len(codes) > 1 else codes[0]
+
+    state = service.install_service(
+        port=8765,
+        token=None,
+        suffix=None,
+        config=None,
+        home=tmp_path,
+        run=run,
+        which=lambda _: "/bin/vpipe-api",
+        sleep=lambda _: None,
+        health=lambda *_: True,
+        **kw,
+    )
+    return state, calls
+
+
+def test_waits_until_bootout_has_unloaded_the_old_agent(tmp_path: Path) -> None:
+    _, calls = _scripted(tmp_path, {"bootout": [0], "print": [0, 0, 113], "bootstrap": [0]})
+    assert calls == ["bootout", "print", "print", "print", "bootstrap"]
+
+
+def test_bootstrap_is_retried_on_errno_5_and_37(tmp_path: Path) -> None:
+    answers = {"bootout": [0], "print": [113], "bootstrap": [5, 37, 0]}
+    state, calls = _scripted(tmp_path, answers)
+    assert state.healthy and calls.count("bootstrap") == 3
+    with pytest.raises(SetupError, match="bootstrap"):
+        _scripted(tmp_path, {"bootout": [0], "print": [113], "bootstrap": [5]})
+    with pytest.raises(SetupError, match="bootstrap"):  # another error is not retried
+        _scripted(tmp_path, {"bootout": [0], "print": [113], "bootstrap": [1, 0]})
+
+
+def test_plist_is_replaced_atomically_in_0700_folders(tmp_path: Path) -> None:
+    _scripted(tmp_path, {"bootout": [0], "print": [113], "bootstrap": [0]})
+    agents, logs = tmp_path / "Library/LaunchAgents", tmp_path / "Library/Logs"
+    assert oct(agents.stat().st_mode & 0o777) == "0o700"
+    assert oct(logs.stat().st_mode & 0o777) == "0o700"
+    assert oct((tmp_path / "Library").stat().st_mode & 0o777) == "0o700"
+    _scripted(tmp_path, {"bootout": [0], "print": [113], "bootstrap": [0]})
+    assert [p.name for p in agents.iterdir()] == ["com.github.kabatin.vpipe-api.plist"]

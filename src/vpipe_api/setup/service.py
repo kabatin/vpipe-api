@@ -15,10 +15,16 @@ from pydantic import SecretStr
 
 from vpipe_api.jobs.coordination import PeerUnreachableError, probe_health
 from vpipe_api.settings import ENV_PREFIX, PeerServer
+from vpipe_api.setup.fs import make_private_dirs, write_atomic
 from vpipe_api.setup.vpipe_build import SetupError
 
 LABEL = "com.github.kabatin.vpipe-api"
 HEALTH_TIMEOUT_S = 60.0
+UNLOAD_WAIT_S = 10.0
+POLL_S = 0.5
+# launchctl bootstrap: 5 (EIO) while the old agent is still going away, 37 (EALREADY)
+BOOTSTRAP_RETRY_CODES = frozenset({5, 37})
+BOOTSTRAP_TRIES = 5
 # launchd starts agents with a bare PATH; ffmpeg usually lives in Homebrew's
 SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -113,14 +119,23 @@ def install_service(
     label = service_label(suffix)
     plist = plist_path(label, home)
     log = log_path(label, home)
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    log.parent.mkdir(parents=True, exist_ok=True)
+    make_private_dirs(log.parent)
     data = build_plist(Path(found).absolute(), label, log, config)
-    plist.write_bytes(plistlib.dumps(data))
+    write_atomic(plist, plistlib.dumps(data), mode=0o644)
     domain = f"gui/{os.getuid()}"
     run(["launchctl", "bootout", f"{domain}/{label}"])  # not loaded yet is fine
-    if run(["launchctl", "bootstrap", domain, str(plist)]) != 0:
-        raise SetupError(f"launchctl bootstrap {domain} {plist} failed")
+    # bootout returns before the old agent is gone; bootstrapping over it fails with EIO
+    for _ in range(int(UNLOAD_WAIT_S / POLL_S)):
+        if run(["launchctl", "print", f"{domain}/{label}"]) != 0:
+            break
+        sleep(POLL_S)
+    for attempt in range(BOOTSTRAP_TRIES):
+        code = run(["launchctl", "bootstrap", domain, str(plist)])
+        if code == 0:
+            break
+        if code not in BOOTSTRAP_RETRY_CODES or attempt == BOOTSTRAP_TRIES - 1:
+            raise SetupError(f"launchctl bootstrap {domain} {plist} failed (exit {code})")
+        sleep(1.0)
     emit(f"service {label} loaded; waiting for {health_url(port)}")
     deadline = time.monotonic() + timeout_s
     while True:
