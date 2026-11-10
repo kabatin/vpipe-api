@@ -8,6 +8,8 @@
 
 English | [日本語](README.ja.md)
 
+> One of the local generation servers behind **[iXA Video Creator](https://github.com/kabatin/ixa-video-creator)**, which turns a song into a music video on one Apple Silicon Mac. It also works on its own.
+
 vpipe runs large generative models (MiniMax H3 video, Qwen-Image, FLUX, …) on-device through its own Metal kernels.
 `vpipe-api` wraps its CLI in a small, safe job server so other tools — an editor, a render farm script,
 a web app on the same LAN — can submit work and fetch results:
