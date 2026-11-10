@@ -8,6 +8,8 @@
 
 [English](README.md) | 日本語
 
+> **[iXA Video Creator](https://github.com/kabatin/ixa-video-creator)**（曲から MV を Mac 1 台で作る制作台）が使う、手元の生成サーバの 1 つ。単体でも使える。
+
 vpipe は MiniMax H3（動画）や Qwen-Image、FLUX などの大型生成モデルを、独自の Metal カーネルで端末内だけで動かす。
 `vpipe-api` はその CLI を小さく安全なジョブサーバーで包み、ほかのツールから仕事を投げて結果を受け取れるようにする。
 想定する呼び出し元は、編集ツール、書き出し用のスクリプト、同じ LAN 上の Web アプリなど。
